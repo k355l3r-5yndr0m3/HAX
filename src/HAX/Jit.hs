@@ -48,4 +48,3 @@ class (Trace t, Traceable f) => Jit t f f' | t f -> f', f' -> t where
 
 
 
-
