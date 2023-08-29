@@ -38,3 +38,16 @@ compile f =
 class Traceable f => Jit t f f' | t f -> f', f' -> t where
   jit' :: Proxy t -> Proxy f -> K t f -> f'
   jit  :: f -> f'
+
+{- examples:
+ -  a     :: Tr s0 t0 -> Tr s1 t1 -> Tr s2 t2 -> Tr s3 t3
+ -  jit a :: 
+ -  firstly, if the args are all tensors, then output is tensor
+ -  if one or more than one tracer (or dual) is inputed, then the output is tracer (or dual)
+ -  we needs to propagate the existance of 
+ -  well, this is jit, it can only be either tensor or tracer 
+ -  jit a :: forall j. Trace j => j s t -> F j f
+ -  F Tr (_ s t -> f) = forall j. Trace j => j s t -> F Tr f
+ -  F Te (_ s t -> f) = forall j. Trace 
+ -  Scrap this, this is two complex
+ - -}
