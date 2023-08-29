@@ -1,6 +1,6 @@
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 module HAX.Jit where
 
 import HAX.Tensor.Tensorial
@@ -8,12 +8,12 @@ import HAX.Tensor.Tensorial
 import HAX.PjRt
 
 import Data.Proxy
-import Data.Kind (Type)
+import Data.Kind
 
 import qualified MLIR.Dialect.Func           as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
-import MLIR hiding (Type)
+import MLIR
 
 type family K (t :: Shape -> Type -> Type) f
 
@@ -35,8 +35,6 @@ compile f =
     return bytecode)
   where (blkM, (ins, outs)) = trace f
 
-
 class Traceable f => Jit t f f' | t f -> f', f' -> t where
   jit' :: Proxy t -> Proxy f -> K t f -> f'
   jit  :: f -> f'
-
