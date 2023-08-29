@@ -5,26 +5,39 @@
 module HAX.Tensor.Tensor where
 import Prelude hiding (lookup)
 
-import HAX.Tensor.Shape
 import HAX.Tensor.Tracer
-import HAX.Tensor.Typeclass
+import HAX.Tensor.Tensorial
 
-import HAX.PjRt
 import HAX.Jit
+import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.HostBufferSemantics
+import HAX.TList (TList(..))
 
 import Data.Proxy
+import Data.Kind
 import Data.Primitive
 
 import Foreign hiding (sizeOf)
-
 import GHC.IO.Unsafe (unsafePerformIO)
-import HAX.TList (TList(..))
+import MLIR
+import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
+newtype Tensor (s :: Shape) a = Tensor { getUnderlyingBuffer :: Buffer }
+class Trace (t :: Shape -> Type -> Type) where
+  auto :: forall s a. T s a => Tensor s a -> t s a
 
-newtype Tensor (s :: Shape) a = Tensor Buffer
-instance Trace Tensor
+instance Trace Tensor where
+  auto = id
+
+instance Trace Tracer where
+  auto :: forall s a. T s a => Tensor s a -> Tracer s a
+  auto tensor = Tracer $ \ t0 -> do 
+    buffer <- blockRunIO $ bufferToHostBuffer $ getUnderlyingBuffer tensor
+    let _attr = denseElemsAttr shape buffer (Proxy :: Proxy a)
+    (t0, ) <$> SHLO._ConstantOp _attr _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s a))
+          shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
 
 -- Pretty print tensor
 instance (KnownShape s, Tensorial a, Show a, Prim a) => Show (Tensor s a) where
@@ -50,7 +63,6 @@ instance (KnownShape s, Tensorial a, Show a, Prim a) => Show (Tensor s a) where
 
 
 
--- These functions are ugly
 tensorFromHostBuffer :: forall s a. (KnownShape s, Tensorial a) => Device -> Ptr a -> IO (Tensor s a)
 tensorFromHostBuffer device buffer = Tensor <$> do 
   (e, b) <- clientBufferFromHostBuffer client buffer (pjrtBufferType p) (Shape shape) kImmutableOnlyDuringCall device
@@ -79,13 +91,6 @@ splat device a = withArray (take elemCount $ repeat a) $ \ a' ->
 
 
 
-type instance K Tensor _ = ([Buffer], LoadedExecutable)
-
-
-instance (T s t) => Jit Tensor (Tracer s t) (Tensor s t) where
-  jit' _ _ (args, exec) = unsafePerformIO $
-    Tensor . head <$> loadedExecutableExecute1Await exec args Nothing 1
-  jit = error "jit should be used with a function."
 
 class TensorList l where 
   tensorList :: [Buffer] -> TList l
@@ -103,7 +108,15 @@ instance (T s t, TensorList l) => TensorList (Tensor s t ': l) where
 
   tensorListLength _ = 1 + tensorListLength (Proxy :: Proxy l)
 
-  
+
+
+
+
+type instance K Tensor _ = ([Buffer], LoadedExecutable)
+instance (T s t) => Jit Tensor (Tracer s t) (Tensor s t) where
+  jit' _ _ (args, exec) = unsafePerformIO $
+    Tensor . head <$> loadedExecutableExecute1Await exec args Nothing 1
+  jit = error "jit should be used with a function."
 
 instance {-# OVERLAPPING #-} (T s t) => Jit Tensor (TList '[Tracer s t]) (TList '[Tensor s t]) where
   jit' _ _ (args, exec) = tensorList $ unsafePerformIO $
@@ -119,11 +132,12 @@ instance (KnownShape s, Tensorial t, Jit Tensor f f') => Jit Tensor (Tracer s t 
   jit' pt _ (args, exec) (Tensor arg) = jit' pt pf' (args', exec)
     where args' = args ++ [arg]
           pf'   = Proxy :: Proxy f
-  jit f = jit' pt pf (args, seq exec exec)
+  jit f = jit' pt pf (args, exec)
     where exec = unsafePerformIO $ compile f
           args = []
           pf   = Proxy :: Proxy (Tracer s t -> f)
           pt   = Proxy :: Proxy Tensor
+
 
 
 instance (KnownShape s, Tensorial t, Num t) => Num (Tensor s t) where

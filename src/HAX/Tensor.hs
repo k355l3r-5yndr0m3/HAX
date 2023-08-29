@@ -1,12 +1,10 @@
 {-# LANGUAGE TypeFamilies #-}
 module HAX.Tensor (
-  module Typeclass
+  module Tensorial
 , module Tracer
 , module Tensor
-, module Shape
 ) where
 
-import HAX.Tensor.Typeclass as Typeclass
 import HAX.Tensor.Tensor    as Tensor
 import HAX.Tensor.Tracer    as Tracer
-import HAX.Tensor.Shape     as Shape
+import HAX.Tensor.Tensorial as Tensorial

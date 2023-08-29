@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 module Main (main) where
 import Foreign
@@ -31,14 +30,20 @@ main = do
       gradient :: Tensor '[12] Float -> Tensor '[12] Float -> TList '[Tensor '[12] Float, Tensor '[12] Float]
       gradient = jit testgrad
       test1jit :: Tensor '[12] Float -> TList '[Tensor '[12] Float] = jit (test1 :: Tracer '[12] Float -> TList '[Tracer '[12] Float])
+      _t :: Tracer '[12] Float -> Tracer '[12] Float
+      _t = test (auto a)
+      _j :: Tensor '[12] Float -> Tensor '[12] Float 
+      _j = jit _t
+      
 
   print $ testjit a b
   print $ test a b
   print $ recip b
   print $ gradient a b
   traceDebug (testjit :: Tracer '[12] Float -> Tracer '[12] Float -> Tracer '[12] Float)
+  traceDebug _t
 
-  putStrLn $ take 12 $ repeat '='
+  putStrLn $ replicate 12 '='
   print $ test1jit a
 
 

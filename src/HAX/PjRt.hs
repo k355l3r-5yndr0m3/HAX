@@ -1,7 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface #-}
-{-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnliftedFFITypes #-}
-{-# LANGUAGE ViewPatterns #-}
 module HAX.PjRt where
 
 import HAX.PjRt.HostBufferSemantics (HostBufferSemantics)
@@ -16,7 +13,7 @@ import qualified HAX.PjRt.Buffer           as C
 
 import GHC.IO.Unsafe (unsafePerformIO)
 import Foreign
-import MLIR.C.IR (Bytecode)
+import MLIR.IR (ByteCode)
 import Data.Primitive.ByteArray (ByteArray)
 import Control.Monad (forM)
 
@@ -30,6 +27,8 @@ api = unsafePerformIO $ C.loadPjRtPlugin =<< getDataFileName "deps/libPJRTPlugin
 {-# NOINLINE client #-}
 client :: Client
 client = unsafePerformIO clientCreate
+
+
 
 newtype Client           = Client           (Ptr C.Client)
 
@@ -51,7 +50,7 @@ clientDestroy (Client c) = C.clientDestroy api c
 clientPlatformName :: Client -> IO String
 clientPlatformName (Client c) = C.clientPlatformName api c
 
-clientCompile :: Client -> Bytecode -> IO (LoadedExecutable)
+clientCompile :: Client -> ByteCode -> IO LoadedExecutable
 clientCompile (Client c) bytecode = do
   executable <- newForeignPtrEnv C.loadedExecutableDestroy__ptr api =<< C.clientCompile api c bytecode 
   return $ LoadedExecutable executable
@@ -92,11 +91,10 @@ loadedExecutableExecute1Await (LoadedExecutable e) argList runOnDevice numOutput
               Just (Device d) -> d
       in  do 
         outputs <- C.loadedExecutableExecute1Await api e' argList' device numOutputs
-        forM outputs (\ b' -> Buffer <$> newForeignPtrEnv C.bufferDestroy__ptr api b')
+        forM outputs (fmap Buffer . newForeignPtrEnv C.bufferDestroy__ptr api)
   where withForeignPtrList :: [ForeignPtr a] -> ([Ptr a] -> IO b) -> IO b
         withForeignPtrList []     f = f []
         withForeignPtrList (p:ps) f = 
           withForeignPtr p $ \ p' -> 
             let f' ps' = f (p' : ps')
             in  withForeignPtrList ps f'
-

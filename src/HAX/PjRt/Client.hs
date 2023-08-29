@@ -22,7 +22,7 @@ import Foreign
 import Foreign.C
 
 import Data.Primitive.ByteArray
-import MLIR.C.IR (Bytecode(..))
+import MLIR.IR (ByteCode(..))
 
 
 foreign import ccall unsafe "client_create"
@@ -52,8 +52,8 @@ foreign import ccall unsafe "client_compile"
   c__clientCompile :: Ptr Api -> Ptr Client -> ByteArray# -> CSize -> Ptr Char -> CSize -> IO (Ptr LoadedExecutable)
 foreign import ccall unsafe "SerializeCompileOptions"
   serializeCompileOptions :: Ptr CSize -> IO (Ptr ())
-clientCompile :: Ptr Api -> Ptr Client -> Bytecode -> IO (Ptr LoadedExecutable)
-clientCompile api client (Bytecode (ByteArray code)) = do
+clientCompile :: Ptr Api -> Ptr Client -> ByteCode -> IO (Ptr LoadedExecutable)
+clientCompile api client (ByteCode (ByteArray code)) = do
   (a, b) <- alloca $ \ptr -> do 
     ops <- serializeCompileOptions ptr
     (ops, ) <$> peek ptr
