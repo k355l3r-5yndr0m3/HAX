@@ -1,7 +1,7 @@
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 module HAX.Tensor.Tensor where
 import Prelude hiding (lookup)
 
@@ -12,7 +12,7 @@ import HAX.Jit
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.HostBufferSemantics
-import HAX.TList (TList(..))
+import HAX.TList
 
 import Data.Proxy
 import Data.Kind
@@ -68,30 +68,25 @@ tensorFromHostBuffer device buffer = Tensor <$> do
   (e, b) <- clientBufferFromHostBuffer client buffer (pjrtBufferType p) (Shape shape) kImmutableOnlyDuringCall device
   eventAwait e
   return b
-  where p = (Proxy :: Proxy a)
+  where p = Proxy :: Proxy a
         shape = fromIntegral <$> shapeVal (Proxy :: Proxy s)
 
 unity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
 unity device = withArray bufferData $ \ buffer -> 
   tensorFromHostBuffer device buffer
-  where bufferData = take (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) $ repeat unitElement
+  where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) unitElement
 
         
 nullity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
 nullity device = withArray bufferData $ \ buffer -> 
   tensorFromHostBuffer device buffer 
-  where bufferData = take (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) $ repeat nullElement
+  where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) nullElement
 
 splat :: forall s a. (KnownShape s, Tensorial a) => Device -> a -> IO (Tensor s a)
-splat device a = withArray (take elemCount $ repeat a) $ \ a' -> 
+splat device a = withArray (replicate elemCount a) $ \ a' -> 
   tensorFromHostBuffer device a'
   where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
   
-
-
-
-
-
 class TensorList l where 
   tensorList :: [Buffer] -> TList l
   tensorListLength :: Proxy l -> Int
@@ -109,36 +104,25 @@ instance (T s t, TensorList l) => TensorList (Tensor s t ': l) where
   tensorListLength _ = 1 + tensorListLength (Proxy :: Proxy l)
 
 
+type JitCacheTensor f = ([Buffer], LoadedExecutable, Proxy f)
+type JitTensor f = (Jit Tensor f, ([Buffer], LoadedExecutable, Proxy f) ~ JitCache Tensor f)
+instance (T s t) => Jit Tensor (Tracer s t) where
+  type JitResult Tensor (Tracer s t) = Tensor s t
+  type JitCache  Tensor (Tracer s t) = JitCacheTensor (Tracer s t)
 
+  jit' (argumentStack, executable, _) = (Tensor . head . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing 1)
+  jitInit _ = error "jitInit was not given a function"
 
+instance (T s t, Jit Tensor f, JitCache Tensor f ~ ([Buffer], LoadedExecutable, Proxy f)) => Jit Tensor (Tracer s t -> f) where
+  type JitResult Tensor (Tracer s t -> f) = Tensor s t -> JitResult Tensor f
+  type JitCache  Tensor (Tracer s t -> f) = JitCacheTensor (Tracer s t -> f)
 
-type instance K Tensor _ = ([Buffer], LoadedExecutable)
-instance (T s t) => Jit Tensor (Tracer s t) (Tensor s t) where
-  jit' _ _ (args, exec) = unsafePerformIO $
-    Tensor . head <$> loadedExecutableExecute1Await exec args Nothing 1
-  jit = error "jit should be used with a function."
+  jit' (argumentStack, executable, _) t = jit' (argumentStack++[getUnderlyingBuffer t], executable, Proxy :: Proxy f)
+  jitInit f = ([], executable, Proxy)
+    where executable = unsafePerformIO $ compile f
 
-instance {-# OVERLAPPING #-} (T s t) => Jit Tensor (TList '[Tracer s t]) (TList '[Tensor s t]) where
-  jit' _ _ (args, exec) = tensorList $ unsafePerformIO $
-    loadedExecutableExecute1Await exec args Nothing 1
-  jit = error "jit should be used with a function."
-
-instance {-# OVERLAPPABLE #-} (T s t, TensorList f', Jit Tensor (TList f) (TList f')) => Jit Tensor (TList (Tracer s t ': f)) (TList (Tensor s t ': f')) where
-  jit' _ _ (args, exec) = tensorList $ unsafePerformIO $ 
-    loadedExecutableExecute1Await exec args Nothing $ tensorListLength (Proxy :: Proxy (Tensor s t ': f'))
-  jit = error "jit should be used with a function."
-
-instance (KnownShape s, Tensorial t, Jit Tensor f f') => Jit Tensor (Tracer s t -> f) (Tensor s t -> f') where
-  jit' pt _ (args, exec) (Tensor arg) = jit' pt pf' (args', exec)
-    where args' = args ++ [arg]
-          pf'   = Proxy :: Proxy f
-  jit f = jit' pt pf (args, exec)
-    where exec = unsafePerformIO $ compile f
-          args = []
-          pf   = Proxy :: Proxy (Tracer s t -> f)
-          pt   = Proxy :: Proxy Tensor
-
-
+jit :: forall f a b. (f ~ (a -> b), JitTracer f, JitTensor f) => f -> forall t. Jit t f => JitResult t f
+jit f = jit' (jitInit f)
 
 instance (KnownShape s, Tensorial t, Num t) => Num (Tensor s t) where
   (+) = jit f

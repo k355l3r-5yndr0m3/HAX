@@ -135,27 +135,17 @@ traceDebug (trace -> (value, (ins, outs))) =
     moduleDestroy m
 
 
-type instance K Tracer f = f
+type JitTracer f = (Jit Tracer f, f ~ JitCache Tracer f)
+instance (T s t) => Jit Tracer (Tracer s t) where
+  type JitResult Tracer (Tracer s t) = Tracer s t
+  type JitCache  Tracer (Tracer s t) = Tracer s t
+  
+  jit' = id
+  jitInit = id
 
-instance (T s t) => Jit Tracer (Tracer s t) (Tracer s t) where
-  jit' _ _ = id
-  jit = error "jit should be used with a function."
+instance (T s t, JitTracer f) => Jit Tracer (Tracer s t -> f) where
+  type JitResult Tracer (Tracer s t -> f) = Tracer s t -> f
+  type JitCache  Tracer (Tracer s t -> f) = Tracer s t -> JitCache Tracer f
 
-instance (T s t) => Jit Tracer (TList '[Tracer s t]) (TList '[Tracer s t]) where
-  jit' _ _ = id 
-  jit  = id
-
-instance (T s t, Jit Tracer (TList f) (TList f')) => Jit Tracer (TList (Tracer s t ': f)) (TList (Tracer s t ': f')) where
-  jit' _ _ (a :+ as) = a :+ jit' Proxy Proxy as
-  jit  = jit' pt pf 
-    where pf :: Proxy (TList (Tracer s t ': f)) = Proxy
-          pt :: Proxy Tracer = Proxy
-
-instance (KnownShape s, Tensorial t, Jit Tracer f f') => Jit Tracer (Tracer s t -> f) (Tracer s t -> f') where
-  jit' pt _ f tracer = jit' pt pf' (f tracer)
-    where pf' = Proxy :: Proxy f
-  jit = jit' pt pf 
-    where pf = Proxy :: Proxy (Tracer s t -> f)
-          pt = Proxy :: Proxy Tracer
-
-
+  jit' = id
+  jitInit = id
