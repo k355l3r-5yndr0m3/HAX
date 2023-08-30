@@ -23,8 +23,10 @@ main = do
   
   let tested :: Jit' (Tracer TestDim Float -> Tracer TestDim Float -> Tracer TestDim Float)
       tested = jit testing
-      gradtest = jit $ rgrad (testing :: (a ~ Tracer TestDim Float) => Reverse a -> Reverse a -> Reverse a)
+      grad   = rgrad (testing :: (a ~ Tracer TestDim Float) => Reverse a -> Reverse a -> Reverse a)
+      gradtest = jit grad
 
+  traceDebug grad
   
   let c = tested a b
       d = tested a c

@@ -9,8 +9,8 @@ import HAX.AD.Reverse
 import HAX.HList
 import HAX.Utils
 
-import Data.Proxy
 import Foreign.C
+import Control.Exception (assert)
 
 
 
@@ -20,19 +20,20 @@ class ReverseMode f where
   rgrad' :: (Gradient -> g, CIntPtr) -> f -> Rev g f
   rgradReify :: Annotated CIntPtr f -> Gradient -> GradResult f
 
--- TODO: Figure out how to do this without Proxy t
---       Make this a function or use overlaping instance
-instance Num t => ReverseMode (Reverse t) where
-  type Rev g (Reverse t) = g
-  type GradResult (Reverse t) = Proxy t
-  rgrad' (fst -> g) = g . (`cotangent` 1)
-  rgradReify _ _ = Proxy
+-- NOTE: This is somewhat undesireable since some part of the code overlap eachother
+--       which could be solved by add another class for types that can be arguments to 
+--       differentiable functions
+instance (Cotangent t0, Num t) => ReverseMode (Reverse t0 -> Reverse t) where
+  type Rev g (Reverse t0 -> Reverse t) = t0 -> g
+  type GradResult (Reverse t0 -> Reverse t) = t0
+  rgrad' (g, i) f t = g (cotangent (f $ Reverse t (independent i)) 1)
+  rgradReify (Annotated idx) (reifyGrad idx -> (g, Gradient g')) = assert (null g') g
 
-instance (ReverseMode f, Cotangent t) => ReverseMode (Reverse t -> f) where
-  type Rev g (Reverse t -> f) = t -> Rev g f
-  type GradResult (Reverse t -> f) = t <+> GradResult f
+instance (ReverseMode (a -> f), Cotangent t) => ReverseMode (Reverse t -> a -> f) where
+  type Rev g (Reverse t -> a -> f) = t -> Rev g (a -> f)
+  type GradResult (Reverse t -> a -> f) = t <+> GradResult (a -> f)
   rgrad' (g, i) f t = rgrad' (g, i + 1) (f $ Reverse t (independent i))
-  rgradReify (Annotated idx) (reifyGrad idx -> (g, g')) = g :+: rgradReify (Annotated (idx + 1) :: Annotated CIntPtr f) g'
+  rgradReify (Annotated idx) (reifyGrad idx -> (g, g')) = g :+: rgradReify (Annotated (idx + 1) :: Annotated CIntPtr (a -> f)) g'
 
 type RGrad f = Rev (GradResult f) f
 rgrad :: forall f. ReverseMode f => f -> RGrad f

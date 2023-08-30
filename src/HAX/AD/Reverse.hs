@@ -5,6 +5,8 @@ import HAX.AD.Gradient
 
 data Reverse t = Reverse { primal :: t, cotangent :: t -> Gradient }
 
+-- TODO: Restrict this to only continuous types (Float, Double, etc)
+--       Discrete types don't have derivatives
 instance Num t => Num (Reverse t) where
   (Reverse f f') + (Reverse g g') = 
     Reverse (f + g) (\ i -> f' i <+> g' i)
