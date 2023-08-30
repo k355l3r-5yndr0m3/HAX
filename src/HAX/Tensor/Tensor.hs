@@ -12,7 +12,7 @@ import HAX.Jit
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.HostBufferSemantics
-import HAX.TList
+-- import HAX.HList
 
 import Data.Proxy
 import Data.Kind
@@ -87,33 +87,55 @@ splat device a = withArray (replicate elemCount a) $ \ a' ->
   tensorFromHostBuffer device a'
   where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
   
-class TensorList l where 
-  tensorList :: [Buffer] -> TList l
-  tensorListLength :: Proxy l -> Int
-
-instance TensorList '[] where
-  tensorList [] = (:@)
-  tensorList _  = error "Incorrect length list"
-
-  tensorListLength _ = 0
-
-instance (T s t, TensorList l) => TensorList (Tensor s t ': l) where
-  tensorList (a:as) = Tensor a :+ tensorList as
-  tensorList _      = error "Incorrect length list"
-
-  tensorListLength _ = 1 + tensorListLength (Proxy :: Proxy l)
 
 
 type JitCacheTensor f = ([Buffer], LoadedExecutable, Proxy f)
 type JitTensor f = (Jit Tensor f, ([Buffer], LoadedExecutable, Proxy f) ~ JitCache Tensor f)
-instance (T s t) => Jit Tensor (Tracer s t) where
+instance T s t => Jit Tensor (Tracer s t) where
   type JitResult Tensor (Tracer s t) = Tensor s t
   type JitCache  Tensor (Tracer s t) = JitCacheTensor (Tracer s t)
 
   jit' (argumentStack, executable, _) = (Tensor . head . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing 1)
   jitInit _ = error "jitInit was not given a function"
 
-instance (T s t, Jit Tensor f, JitCache Tensor f ~ ([Buffer], LoadedExecutable, Proxy f)) => Jit Tensor (Tracer s t -> f) where
+
+--instance T s t => Jit Tensor (HList '[Tracer s t]) where
+--  type JitResult Tensor (HList '[Tracer s t]) = HList '[Tensor s t]
+--  type JitCache  Tensor (HList '[Tracer s t]) = JitCacheTensor (HList '[Tensor s t])
+--
+--  jit' (argumentStack, executable, _) = results :+ (:@)
+--    where results = (Tensor . head . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing 1)
+--  jitInit _ = error "jitInit was not given a function"
+--
+--class ListToTensorHList l where
+--  l2thl :: [Buffer] -> HList l
+--instance ListToTensorHList '[] where 
+--  l2thl [] = (:@)
+--  l2thl _  = error "Wrong length"
+--instance ListToTensorHList as => ListToTensorHList (Tensor s t ': as) where
+--  l2thl (a:as) = Tensor a :+ l2thl as
+--  l2thl _      = error "Wrong length"
+--
+--type family A lhs rhs where
+--  A '[] rhs = rhs 
+--  A (a ': as) rhs = a ': A as rhs 
+--type family B lhs rhs where
+--  B (HList lhs) (HList rhs) = HList (A lhs rhs)
+--
+--instance (T s t, JitTensor (HList (Tracer s' t' ':ls)), HListLen (Tracer s t ': Tracer s' t' ':ls), HList k ~ JitResult Tensor (HList (Tracer s' t' ':ls))) => Jit Tensor (HList (Tracer s t ': Tracer s' t' ':ls)) where
+--  type JitResult Tensor (HList (Tracer s t ': Tracer s' t' ':ls)) = B (HList '[Tensor s t]) (JitResult Tensor (HList (Tracer s' t' ': ls)))
+
+--  type JitResult Tensor (HList (Tracer s t ': Tracer s' t' ':ls)) = HList (Tracer s t ': Tracer s' t' ':ls)
+--  type JitCache  Tensor (HList (Tracer s t ': Tracer s' t' ':ls)) = JitCacheTensor (HList (Tracer s t ': Tracer s' t' ':ls))
+
+--  jit' (argumentStack, executable, _) = l2thl results
+--    where coarity = fromIntegral (hlistLen (undefined :: HList (Tracer s t ': Tracer s' t' ':ls)))
+--          results = unsafePerformIO (loadedExecutableExecute1Await executable argumentStack Nothing coarity)
+--  jitInit _ = error "jitInit was not given a function"
+
+
+
+instance (T s t, JitTensor f) => Jit Tensor (Tracer s t -> f) where
   type JitResult Tensor (Tracer s t -> f) = Tensor s t -> JitResult Tensor f
   type JitCache  Tensor (Tracer s t -> f) = JitCacheTensor (Tracer s t -> f)
 
@@ -121,7 +143,12 @@ instance (T s t, Jit Tensor f, JitCache Tensor f ~ ([Buffer], LoadedExecutable, 
   jitInit f = ([], executable, Proxy)
     where executable = unsafePerformIO $ compile f
 
-jit :: forall f a b. (f ~ (a -> b), JitTracer f, JitTensor f) => f -> forall t. Jit t f => JitResult t f
+
+
+
+
+
+jit :: forall f a b. (f ~ (a -> b), JitTracer f, JitTensor f) => f -> Jit' f
 jit f = jit' (jitInit f)
 
 instance (KnownShape s, Tensorial t, Num t) => Num (Tensor s t) where

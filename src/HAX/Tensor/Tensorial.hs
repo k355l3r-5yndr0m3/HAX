@@ -3,7 +3,7 @@
 {-# LANGUAGE TypeFamilies #-}
 module HAX.Tensor.Tensorial where
 import HAX.PjRt.BufferType
-import HAX.TList
+import HAX.HList
 
 import Data.Proxy
 import GHC.TypeLits
@@ -41,8 +41,8 @@ class (Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElem
   elemByteSize   :: Proxy a -> Int
 
   denseSplatAttr :: [Int64] -> a -> DenseSplatAttr a
+  -- TODO: Change ByteArray to something else that is parameterized by a 
   denseElemsAttr :: [Int64] -> ByteArray -> Proxy a -> DenseElemsAttr a
---  denseElemsAttr :: Proxy a -> Type -> ByteArray -> Attribute
 
   unitElement :: a  
   nullElement :: a
@@ -66,7 +66,7 @@ instance Tensorial Float where
 class Traceable f where
   trace' :: CIntPtr -> f -> (BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
 
-instance Traceable (TList '[]) where 
+instance Traceable (HList '[]) where 
   trace' _ (:@) = (return (empty, []), ([], []))
 
 trace :: Traceable (a -> b) => (a -> b) -> (BlockM [Value], ([AnyType], [AnyType]))

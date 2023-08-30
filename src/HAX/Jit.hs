@@ -32,6 +32,7 @@ compile f =
     return bytecode)
   where (blkM, (ins, outs)) = trace f
 
+type Jit' f = forall t. Jit t f => JitResult t f
 class Traceable f => Jit (t :: Shape -> Type -> Type) (f :: Type) where
   type JitResult t f = r | r -> t f
   type JitCache  t f = c | c -> t f

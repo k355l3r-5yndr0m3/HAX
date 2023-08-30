@@ -1,15 +1,13 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE LiberalTypeSynonyms #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
 module HAX.Tensor.Tracer where
 import Prelude hiding (lookup)
 
 import HAX.Tensor.Tensorial
 
-import HAX.TList
+import HAX.HList
 import HAX.Jit
 
 import Data.IntMap.Strict hiding (singleton)
@@ -34,7 +32,6 @@ instance (KnownShape s, Tensorial t, Num t) => Num (Tracer s t) where
     (t2, _rhs) <- valueOf rhs t1
     (t2, ) <$> SHLO._AddOp _lhs _rhs _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
 
   lhs - rhs = Tracer $ \ t0 -> do 
     (t1, _lhs) <- valueOf lhs t0
@@ -100,17 +97,19 @@ valueOf tracer table = do
         return (insert hash value table', value)
 
 
-instance (T s t) => Traceable (Tracer s t) where
+instance T s t => Traceable (Tracer s t) where
   trace' _ u = (fmap singleton <$> valueOf u empty, ([], [_type]))
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
-instance (T s t, Traceable (TList as)) => Traceable (TList (Tracer s t ':as)) where
-  trace' i (u :+   us) = (k', (ins, _type:outs))
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-          (k, (ins, outs)) = trace' i us
-          k' = do 
-            (tabl, vals) <- k 
-            fmap (:vals) <$> valueOf u tabl
+instance (T s t, Traceable (HList ls)) => Traceable (HList (Tracer s t ': ls)) where
+  trace' _ (u:+us) = (do 
+    (t0, vs) <- us'
+    (t1, v1) <- valueOf u t0
+    return (t1, v1:vs)
+      ,(inputs, _type:outputs))
+    where (us', (inputs, outputs)) = trace' undefined us
+          _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
 
 instance (T s t, Traceable f) => Traceable (Tracer s t -> f) where 
   trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
@@ -136,16 +135,32 @@ traceDebug (trace -> (value, (ins, outs))) =
 
 
 type JitTracer f = (Jit Tracer f, f ~ JitCache Tracer f)
-instance (T s t) => Jit Tracer (Tracer s t) where
+instance T s t => Jit Tracer (Tracer s t) where
   type JitResult Tracer (Tracer s t) = Tracer s t
   type JitCache  Tracer (Tracer s t) = Tracer s t
   
   jit' = id
   jitInit = id
 
+-- instance T s t => Jit Tracer (HList '[Tracer s t]) where
+--   type JitResult Tracer (HList '[Tracer s t]) = HList '[Tracer s t]
+--   type JitCache  Tracer (HList '[Tracer s t]) = HList '[Tracer s t]
+-- 
+--   jit' = id 
+--   jitInit = id
+-- 
+-- instance (T s t, JitTracer (HList (Tracer s' t' ':ls))) => Jit Tracer (HList (Tracer s t ': Tracer s' t' ':ls)) where
+--   type JitResult Tracer (HList (Tracer s t ': Tracer s' t' ':ls)) = HList (Tracer s t ': Tracer s' t' ':ls)
+--   type JitCache  Tracer (HList (Tracer s t ': Tracer s' t' ':ls)) = HList (Tracer s t ': Tracer s' t' ':ls)
+-- 
+--   jit' = id
+--   jitInit = id
+
+
 instance (T s t, JitTracer f) => Jit Tracer (Tracer s t -> f) where
   type JitResult Tracer (Tracer s t -> f) = Tracer s t -> f
-  type JitCache  Tracer (Tracer s t -> f) = Tracer s t -> JitCache Tracer f
+  type JitCache  Tracer (Tracer s t -> f) = Tracer s t -> f
 
   jit' = id
   jitInit = id
+

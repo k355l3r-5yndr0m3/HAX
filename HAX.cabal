@@ -70,9 +70,11 @@ library
     exposed-modules:  HAX
                       HAX.PjRt
                       HAX.Tensor
+                      HAX.AD
                       HAX.AD.Reverse
+                      HAX.AD.Gradient
                       HAX.Jit
-                      HAX.TList
+--                      HAX.HList
     -- TODO: Move some of these modules to other
 
     -- Modules included in this library but not exported.
@@ -99,8 +101,8 @@ library
                       stablehlo-hs,
                       primitive,
                       containers,
-                      vector,
-                      reflection
+                      -- vector,
+                      -- reflection
 
 
     -- Directories containing source files.
