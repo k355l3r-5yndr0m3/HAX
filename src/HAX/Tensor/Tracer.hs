@@ -1,4 +1,5 @@
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
@@ -98,17 +99,8 @@ valueOf tracer table = do
 
 
 instance T s t => Traceable (Tracer s t) where
-  trace' _ u = (fmap singleton <$> valueOf u empty, ([], [_type]))
+  trace' _ u = (fmap (fmap singleton) . valueOf u, ([], [_type]))
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
-instance (T s t, Traceable (HList ls)) => Traceable (HList (Tracer s t ': ls)) where
-  trace' _ (u:+us) = (do 
-    (t0, vs) <- us'
-    (t1, v1) <- valueOf u t0
-    return (t1, v1:vs)
-      ,(inputs, _type:outputs))
-    where (us', (inputs, outputs)) = trace' undefined us
-          _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 
 instance (T s t, Traceable f) => Traceable (Tracer s t -> f) where 
@@ -135,27 +127,31 @@ traceDebug (trace -> (value, (ins, outs))) =
 
 
 type JitTracer f = (Jit Tracer f, f ~ JitCache Tracer f)
+instance Jit Tracer (Proxy (Tracer s t)) where
+  type JitResult Tracer (Proxy (Tracer s t)) = Proxy (Tracer s t)
+  type JitCache  Tracer (Proxy (Tracer s t)) = Proxy (Tracer s t)
+
+  jit' = id
+  jitInit = id
+  jitReify = undefined
+
 instance T s t => Jit Tracer (Tracer s t) where
   type JitResult Tracer (Tracer s t) = Tracer s t
   type JitCache  Tracer (Tracer s t) = Tracer s t
   
   jit' = id
   jitInit = id
+  jitReify = undefined
 
--- instance T s t => Jit Tracer (HList '[Tracer s t]) where
---   type JitResult Tracer (HList '[Tracer s t]) = HList '[Tracer s t]
---   type JitCache  Tracer (HList '[Tracer s t]) = HList '[Tracer s t]
--- 
---   jit' = id 
---   jitInit = id
--- 
--- instance (T s t, JitTracer (HList (Tracer s' t' ':ls))) => Jit Tracer (HList (Tracer s t ': Tracer s' t' ':ls)) where
---   type JitResult Tracer (HList (Tracer s t ': Tracer s' t' ':ls)) = HList (Tracer s t ': Tracer s' t' ':ls)
---   type JitCache  Tracer (HList (Tracer s t ': Tracer s' t' ':ls)) = HList (Tracer s t ': Tracer s' t' ':ls)
--- 
---   jit' = id
---   jitInit = id
 
+-- Because <+> can form binary tree, great care is needed to flaten and unflaten it
+instance (JitTracer a, JitTracer b) => Jit Tracer (a <+> b) where
+  type JitResult Tracer (a <+> b) = JitResult Tracer a <+> JitResult Tracer b
+  type JitCache  Tracer (a <+> b) = a <+> b
+  
+  jit' (a :+: b) = jit' a :+: jit' b
+  jitInit = id
+  jitReify = undefined
 
 instance (T s t, JitTracer f) => Jit Tracer (Tracer s t -> f) where
   type JitResult Tracer (Tracer s t -> f) = Tracer s t -> f
@@ -163,4 +159,5 @@ instance (T s t, JitTracer f) => Jit Tracer (Tracer s t -> f) where
 
   jit' = id
   jitInit = id
+  jitReify = undefined
 

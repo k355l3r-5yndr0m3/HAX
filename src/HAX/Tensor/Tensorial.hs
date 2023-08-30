@@ -3,8 +3,8 @@
 {-# LANGUAGE TypeFamilies #-}
 module HAX.Tensor.Tensorial where
 import HAX.PjRt.BufferType
-import HAX.HList
 
+import HAX.HList
 import Data.Proxy
 import GHC.TypeLits
 
@@ -38,7 +38,7 @@ class (Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElem
   shloTensorType' :: Proxy a -> AnyType
   shloTensorType' = toAnyType . shloTensorType
 
-  elemByteSize   :: Proxy a -> Int
+  staticSizeOf   :: Proxy a -> Int
 
   denseSplatAttr :: [Int64] -> a -> DenseSplatAttr a
   -- TODO: Change ByteArray to something else that is parameterized by a 
@@ -54,7 +54,7 @@ instance Tensorial Float where
 
   pjrtBufferType _ = f32
   shloTensorType _ = F32Type
-  elemByteSize   _ = sizeOf (0 :: Float)
+  staticSizeOf   _ = sizeOf (0 :: Float)
   
   denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape F32Type NullAttr)
   denseElemsAttr shape tensorData _ = DenseElementsRawBuffer (RankedTensorType shape F32Type NullAttr) tensorData
@@ -63,14 +63,26 @@ instance Tensorial Float where
   nullElement = 0
 
 -- Traceable
+-- NOTE: What the performance difference between IntMap Value being outside/inside tuple
 class Traceable f where
-  trace' :: CIntPtr -> f -> (BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
+  trace' :: CIntPtr -> f -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
+-- Note since a <+> is a tree, care must be apply when traverse it so flatteninng and inflatting can be consistent
+instance (Traceable a, Traceable b) => Traceable (a <+> b) where
+  trace' _ (a :+: b) = (\ t0 -> do 
+    (t1, _lhs) <- fst lhs t0 
+    (t2, _rhs) <- fst rhs t1 
+    return (t2, _lhs ++ _rhs), join (snd lhs) (snd rhs))
+    where lhs = trace' errmsg a
+          rhs = trace' errmsg b
+          join :: ([AnyType], [AnyType]) -> ([AnyType], [AnyType]) -> ([AnyType], [AnyType])
+          join (_a, _b) (_c, _d) = (_a ++ _c, _b ++ _d)
+          errmsg = error "the traced function is not regular"
+instance Traceable (Proxy a) where
+  trace' _ _ = (\ tbl -> return (tbl, []), ([], []))
 
-instance Traceable (HList '[]) where 
-  trace' _ (:@) = (return (empty, []), ([], []))
 
 trace :: Traceable (a -> b) => (a -> b) -> (BlockM [Value], ([AnyType], [AnyType]))
-trace f = (fmap snd _fst, _snd)
+trace f = (fmap snd (_fst empty), _snd)
   where (_fst, _snd) = trace' 0 f
 
 type T s t = (KnownShape s, Tensorial t)

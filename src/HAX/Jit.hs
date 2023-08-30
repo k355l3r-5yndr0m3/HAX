@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 module HAX.Jit where
 
@@ -8,14 +9,15 @@ import HAX.PjRt
 
 import Data.Kind
 
+import MLIR
+
 import qualified MLIR.Dialect.Func           as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
-import MLIR
 
 
-compile :: Traceable (a -> b) => (a -> b) -> IO LoadedExecutable
-compile f =
+compile :: Traceable (a -> b) => (a -> b) -> IO (Int, LoadedExecutable)
+compile f = (length outs, ) <$> (
   clientCompile client =<< runContextM (do 
     loadDialect_ Func.dialect
     loadDialect_ SHLO.dialect
@@ -29,8 +31,9 @@ compile f =
           Func._ReturnOp _out
     bytecode <- writeByteCode (moduleGetOperation m) 
     moduleDestroy m 
-    return bytecode)
+    return bytecode))
   where (blkM, (ins, outs)) = trace f
+
 
 type Jit' f = forall t. Jit t f => JitResult t f
 class Traceable f => Jit (t :: Shape -> Type -> Type) (f :: Type) where
@@ -40,3 +43,4 @@ class Traceable f => Jit (t :: Shape -> Type -> Type) (f :: Type) where
   jit' :: JitCache t f -> JitResult t f
   jitInit :: f -> JitCache t f
 
+  jitReify :: [Buffer] -> (JitResult t f, [Buffer])

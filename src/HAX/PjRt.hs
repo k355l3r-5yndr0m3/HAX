@@ -16,6 +16,7 @@ import Foreign
 import MLIR.IR (ByteCode)
 import Data.Primitive.ByteArray (ByteArray)
 import Control.Monad (forM)
+import Data.Unique
 
 import Paths_HAX
 
@@ -52,6 +53,8 @@ clientPlatformName (Client c) = C.clientPlatformName api c
 
 clientCompile :: Client -> ByteCode -> IO LoadedExecutable
 clientCompile (Client c) bytecode = do
+  i <- newUnique
+  putStrLn $ "Compiling " ++ show (hashUnique i) -- Tibit of code to check for recompilation, debugging only
   executable <- newForeignPtrEnv C.loadedExecutableDestroy__ptr api =<< C.clientCompile api c bytecode 
   return $ LoadedExecutable executable
 

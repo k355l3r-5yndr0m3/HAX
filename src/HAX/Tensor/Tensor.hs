@@ -12,7 +12,9 @@ import HAX.Jit
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.HostBufferSemantics
--- import HAX.HList
+-- TODO: Might merge HList and Utils
+import HAX.HList
+import HAX.Utils
 
 import Data.Proxy
 import Data.Kind
@@ -22,6 +24,7 @@ import Foreign hiding (sizeOf)
 import GHC.IO.Unsafe (unsafePerformIO)
 import MLIR
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
+import Control.Exception (assert)
 
 newtype Tensor (s :: Shape) a = Tensor { getUnderlyingBuffer :: Buffer }
 class Trace (t :: Shape -> Type -> Type) where
@@ -40,13 +43,13 @@ instance Trace Tracer where
           shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
 
 -- Pretty print tensor
-instance (KnownShape s, Tensorial a, Show a, Prim a) => Show (Tensor s a) where
+instance (T s a, Show a, Prim a) => Show (Tensor s a) where
   show (Tensor b) = unsafePerformIO $ do
     hostbuff <- bufferToHostBuffer b
     let elemCount = sizeofByteArray hostbuff `div` elemSize
         shape     = (\ (fromIntegral -> a) -> (a - 1, a - 1)) <$> shapeVal (Proxy :: Proxy s)
     return $ fst $ formater (elemCount - 1) shape hostbuff ""
-    where elemSize = sizeOf (undefined :: a)
+    where elemSize = staticSizeOf (Proxy :: Proxy a)
           formater :: Int -> [(Int, Int)] -> ByteArray -> String -> (String, Int)
           formater offs [] buf s = 
             let a :: a = indexByteArray buf offs
@@ -89,63 +92,52 @@ splat device a = withArray (replicate elemCount a) $ \ a' ->
   
 
 
-type JitCacheTensor f = ([Buffer], LoadedExecutable, Proxy f)
-type JitTensor f = (Jit Tensor f, ([Buffer], LoadedExecutable, Proxy f) ~ JitCache Tensor f)
+type JitCacheTensor f = ([Buffer], LoadedExecutable, Annotated Int f)
+type JitTensor f = (Jit Tensor f, JitCacheTensor f ~ JitCache Tensor f)
+instance Jit Tensor (Proxy (Tracer s t)) where
+  type JitResult Tensor (Proxy (Tracer s t)) = Proxy (Tensor s t)
+  type JitCache  Tensor (Proxy (Tracer s t)) = JitCacheTensor (Proxy (Tracer s t))
+  
+  jit' _ = Proxy
+  jitInit _ = error "jitInit was not given a function"
+
+  jitReify l = (Proxy, l)
+
 instance T s t => Jit Tensor (Tracer s t) where
   type JitResult Tensor (Tracer s t) = Tensor s t
   type JitCache  Tensor (Tracer s t) = JitCacheTensor (Tracer s t)
 
-  jit' (argumentStack, executable, _) = (Tensor . head . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing 1)
+  jit' (argumentStack, executable, _) = assert (null excess) output
+    where (output, excess) = (jitReify . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing 1)
+
   jitInit _ = error "jitInit was not given a function"
 
+  jitReify (a:as) = (Tensor a, as)
+  jitReify _      = error "Computation does not produce all demanded results"
 
---instance T s t => Jit Tensor (HList '[Tracer s t]) where
---  type JitResult Tensor (HList '[Tracer s t]) = HList '[Tensor s t]
---  type JitCache  Tensor (HList '[Tracer s t]) = JitCacheTensor (HList '[Tensor s t])
---
---  jit' (argumentStack, executable, _) = results :+ (:@)
---    where results = (Tensor . head . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing 1)
---  jitInit _ = error "jitInit was not given a function"
---
---class ListToTensorHList l where
---  l2thl :: [Buffer] -> HList l
---instance ListToTensorHList '[] where 
---  l2thl [] = (:@)
---  l2thl _  = error "Wrong length"
---instance ListToTensorHList as => ListToTensorHList (Tensor s t ': as) where
---  l2thl (a:as) = Tensor a :+ l2thl as
---  l2thl _      = error "Wrong length"
---
---type family A lhs rhs where
---  A '[] rhs = rhs 
---  A (a ': as) rhs = a ': A as rhs 
---type family B lhs rhs where
---  B (HList lhs) (HList rhs) = HList (A lhs rhs)
---
---instance (T s t, JitTensor (HList (Tracer s' t' ':ls)), HListLen (Tracer s t ': Tracer s' t' ':ls), HList k ~ JitResult Tensor (HList (Tracer s' t' ':ls))) => Jit Tensor (HList (Tracer s t ': Tracer s' t' ':ls)) where
---  type JitResult Tensor (HList (Tracer s t ': Tracer s' t' ':ls)) = B (HList '[Tensor s t]) (JitResult Tensor (HList (Tracer s' t' ': ls)))
+instance (JitTensor a, JitTensor b) => Jit Tensor (a <+> b) where
+  type JitResult Tensor (a <+> b) = JitResult Tensor a <+> JitResult Tensor b
+  type JitCache  Tensor (a <+> b) = JitCacheTensor (a <+> b)
 
---  type JitResult Tensor (HList (Tracer s t ': Tracer s' t' ':ls)) = HList (Tracer s t ': Tracer s' t' ':ls)
---  type JitCache  Tensor (HList (Tracer s t ': Tracer s' t' ':ls)) = JitCacheTensor (HList (Tracer s t ': Tracer s' t' ':ls))
-
---  jit' (argumentStack, executable, _) = l2thl results
---    where coarity = fromIntegral (hlistLen (undefined :: HList (Tracer s t ': Tracer s' t' ':ls)))
---          results = unsafePerformIO (loadedExecutableExecute1Await executable argumentStack Nothing coarity)
---  jitInit _ = error "jitInit was not given a function"
-
-
+  jit' (argumentStack, executable, Annotated coarity) = assert (null excess) output
+    where (output, excess) = (jitReify . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing coarity)
+  
+  jitInit _ = error "jitInit was not given a function"
+  jitReify r0 = (a :+: b, r2)
+    where (a, r1) = jitReify r0
+          (b, r2) = jitReify r1
+  
 
 instance (T s t, JitTensor f) => Jit Tensor (Tracer s t -> f) where
   type JitResult Tensor (Tracer s t -> f) = Tensor s t -> JitResult Tensor f
   type JitCache  Tensor (Tracer s t -> f) = JitCacheTensor (Tracer s t -> f)
 
-  jit' (argumentStack, executable, _) t = jit' (argumentStack++[getUnderlyingBuffer t], executable, Proxy :: Proxy f)
-  jitInit f = ([], executable, Proxy)
-    where executable = unsafePerformIO $ compile f
+  jit' (argumentStack, executable, Annotated coarity) t = jit' (argumentStack++[getUnderlyingBuffer t], executable, Annotated coarity)
 
+  jitInit f = ([], executable, Annotated coarity)
+    where (coarity, executable) = unsafePerformIO $ compile f
 
-
-
+  jitReify = error "Should not be possible"
 
 
 jit :: forall f a b. (f ~ (a -> b), JitTracer f, JitTensor f) => f -> Jit' f
