@@ -8,6 +8,7 @@ import Prelude hiding (lookup)
 import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
 
+import HAX.Math 
 import HAX.Jit
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
@@ -144,26 +145,28 @@ jit :: forall f a b. (f ~ (a -> b), JitTracer f, JitTensor f) => f -> Jit' f
 jit f = jit' (jitInit f)
 
 instance (KnownShape s, Tensorial t, Num t) => Num (Tensor s t) where
-  (+) = jit f
-    where f :: Tracer s t -> Tracer s t -> Tracer s t = (+)
-  (-) = jit f
-    where f :: Tracer s t -> Tracer s t -> Tracer s t = (-)
-  (*) = jit f
-    where f :: Tracer s t -> Tracer s t -> Tracer s t = (*)
+  (+) = jit (+)
+  (-) = jit (-)
+  (*) = jit (*)
 
-  signum = jit f
-    where f :: Tracer s t -> Tracer s t = signum
-  abs    = jit f
-    where f :: Tracer s t -> Tracer s t = abs
-  negate = jit f
-    where f :: Tracer s t -> Tracer s t = negate
+  signum = jit signum
+  abs    = jit abs
+  negate = jit negate
 
   fromInteger = error "This is problematic"
 
 instance (KnownShape s, Tensorial t, Fractional t) => Fractional (Tensor s t) where
-  (/) = jit f
-    where f :: Tracer s t -> Tracer s t -> Tracer s t = (/)
-  recip = jit f
-    where f :: Tracer s t -> Tracer s t = (1 /)
+  (/) = jit (/)
+  recip = jit recip
 
   fromRational = error "This is problematic"
+
+instance TensorOp Tensor where
+  broadcast :: forall t (org :: Shape) (map :: Shape) (targ :: Shape). (Broadcast org map targ, Tensorial t) => Tensor org t -> Proxy map -> Tensor targ t
+  broadcast i p = jit f i
+    where f :: Tracer org t -> Tracer targ t 
+          f = (`broadcast` p)
+  broadcast' = jit broadcast'
+
+  prod :: forall l r p t. (TensorProductConstraint l r p, Tensorial t) => Tensor l t -> Tensor r t -> Tensor p t
+  prod = jit prod

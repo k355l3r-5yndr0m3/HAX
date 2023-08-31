@@ -6,6 +6,7 @@
 module HAX.Tensor.Tracer where
 import Prelude hiding (lookup)
 
+import HAX.Math 
 import HAX.Tensor.Tensorial
 
 import HAX.HList
@@ -15,14 +16,16 @@ import Data.IntMap.Strict hiding (singleton)
 import Data.List (singleton)
 import Data.Proxy
 import Data.Bifunctor
+import Foreign
 
 import GHC.StableName
 
 import MLIR
 
 import qualified MLIR.Dialect.Func as Func
-import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
+import qualified Stablehlo.Dialect.Stablehlo as SHLO
+import Stablehlo.Dialect.Stablehlo.Attributes
 
 newtype Tracer (s :: Shape) t = Tracer (IntMap Value -> BlockM (IntMap Value, Value))
 
@@ -69,7 +72,7 @@ instance (KnownShape s, Tensorial t, Num t) => Num (Tracer s t) where
 
 
 
-instance (KnownShape s, Tensorial t, Fractional t) => Fractional (Tracer s t) where
+instance (T s t, Fractional t) => Fractional (Tracer s t) where
   lhs / rhs = Tracer $ \ t0 -> do 
     (t1, _lhs) <- valueOf lhs t0
     (t2, _rhs) <- valueOf rhs t1
@@ -81,6 +84,39 @@ instance (KnownShape s, Tensorial t, Fractional t) => Fractional (Tracer s t) wh
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
           shape      = fromIntegral <$> shapeVal (Proxy :: Proxy s)
           a :: t     = fromRational literal
+
+
+instance TensorOp Tracer where
+  broadcast :: forall t org map targ. (Broadcast org map targ, Tensorial t) => Tracer org t -> Proxy map -> Tracer targ t
+  broadcast org _ = Tracer $ \ t0 -> do 
+    (t1, _org) <- valueOf org t0 
+    (t1, ) <$> SHLO._BroadcastInDimOp mapping _org _type
+      where mapping' :: [Word64] = fromInteger <$> shapeVal (Proxy :: Proxy map)
+            mapping              = DenseIntOrFPElements (VectorType [fromIntegral $ length mapping'] I64) mapping'
+            _type                = tensorType' (Proxy :: Proxy (Tracer targ t))
+  broadcast' :: forall org targ t. (Broadcast' org targ, Tensorial t) => Tracer org t -> Tracer targ t  
+  broadcast' org = Tracer $ \ t0 -> do 
+    (t1, _org) <- valueOf org t0 
+    (t1, ) <$> SHLO._BroadcastInDimOp mapping _org _type 
+    where _type                = tensorType' (Proxy :: Proxy (Tracer targ t))
+          orgRank              = shapeRank (Proxy :: Proxy org)
+          targRank             = shapeRank (Proxy :: Proxy targ)
+          mapping' :: [Word64] = fromIntegral <$> take (fromInteger orgRank) [targRank - orgRank..]
+          mapping              = DenseIntOrFPElements (VectorType [fromIntegral orgRank] I64) mapping'
+
+
+
+  prod :: forall l r p t. (TensorProductConstraint l r p, Tensorial t) => Tracer l t -> Tracer r t -> Tracer p t
+  prod lhs rhs = Tracer $ \ t0 -> do 
+    (t1, _lhs) <- valueOf lhs t0 
+    (t2, _rhs) <- valueOf rhs t1 
+    (t2, ) <$> SHLO._DotGeneralOp attr Nothing _lhs _rhs _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer p t))
+          attr  = DotDimensionNumbersAttr {
+            getBatchingDims = [],
+            getContractingDims = []
+          }
+
 
 
 valueOf :: forall s t. Tracer s t -> IntMap Value -> BlockM (IntMap Value, Value)

@@ -21,6 +21,7 @@ import Data.Unique
 import Paths_HAX
 
 -- Global singleton
+-- TODO: Implement using a nullity type class
 {-# NOINLINE api #-}
 api :: Ptr C.Api
 api = unsafePerformIO $ C.loadPjRtPlugin =<< getDataFileName "deps/libPJRTPlugin.so"
@@ -29,8 +30,13 @@ api = unsafePerformIO $ C.loadPjRtPlugin =<< getDataFileName "deps/libPJRTPlugin
 client :: Client
 client = unsafePerformIO clientCreate
 
+-- TODO: Implement a scheme where the devices are choosen at runtime for 
+--       efficiency. 
+{-# NOINLINE defaultDevice #-}
+defaultDevice :: Device
+defaultDevice = head $ clientAddressableDevices client
 
-
+-- New types
 newtype Client           = Client           (Ptr C.Client)
 
 -- The IO is there to keep client alive
@@ -58,8 +64,9 @@ clientCompile (Client c) bytecode = do
   executable <- newForeignPtrEnv C.loadedExecutableDestroy__ptr api =<< C.clientCompile api c bytecode 
   return $ LoadedExecutable executable
 
-clientAddressableDevices :: Client -> IO [Device]
-clientAddressableDevices (Client c) = do
+-- The output of this function should not change unless there is a feature of xla that I'm not aware of
+clientAddressableDevices :: Client -> [Device]
+clientAddressableDevices (Client c) = unsafePerformIO $ do
   devices <- C.clientAddressableDevices api c
   return $ Device <$> devices 
   

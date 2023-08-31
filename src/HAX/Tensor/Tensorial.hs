@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 module HAX.Tensor.Tensorial where
 import HAX.PjRt.BufferType
 
@@ -14,17 +15,68 @@ import Foreign.C
 import MLIR 
 import Data.IntMap.Strict (IntMap, empty)
 import Data.Primitive.ByteArray
+import Data.Kind 
 
 -- Shape
 type Shape = [Nat]
 class KnownShape (s :: Shape) where
   shapeVal :: Proxy s -> [Integer]
+  shapeRank :: Proxy s -> Integer
   
 instance KnownShape '[] where
   shapeVal _ = []
+  shapeRank _ = 0
 
 instance (KnownNat a, KnownShape as) => KnownShape (a ': as) where
   shapeVal _ = natVal (Proxy :: Proxy a) : shapeVal (Proxy :: Proxy as)
+  shapeRank _ = 1 + shapeRank (Proxy :: Proxy as)
+
+type family ReverseListImpl (retro :: [a]) (pro :: [a]) :: [a] where
+  ReverseListImpl r '[] = r
+  ReverseListImpl r (a ': as) = ReverseListImpl (a ': r) as
+type ReverseList l = ReverseListImpl '[] l
+type family InitEq (lhs :: [a]) (rhs :: [a]) (f :: Constraint) :: Constraint where
+  InitEq '[] _ _ = ()
+  InitEq _ '[] _ = ()
+  InitEq (a ': lhs) (a ': rhs) f = InitEq lhs rhs f
+  InitEq _ _ f   = f
+type TailEq lhs rhs f = InitEq (ReverseList lhs) (ReverseList rhs) f
+
+type family IsPrefixOf (prefix :: [a]) (string :: [a]) (f :: Constraint) :: Constraint where
+  IsPrefixOf '[] _ _ = ()
+  IsPrefixOf (a ': as) (a ': bs) f = IsPrefixOf as bs f
+  IsPrefixOf _ _ f = f
+type IsSuffixOf suffix string f = IsPrefixOf (ReverseList suffix) (ReverseList string) f
+
+type family ShapeNatAt (s :: [a]) (i :: Nat) :: a where
+  ShapeNatAt (a ': as) 0 = a
+  ShapeNatAt (a ': as) i = ShapeNatAt as (i - 1)
+  ShapeNatAt '[]       _ = TypeError (Text "Indexing out of bound" :$$: 
+                                      Text "Tries smaller number")
+type family UniqueImpl1 (a :: a') (as :: [a']) (f :: Constraint) :: Constraint where
+  UniqueImpl1 a '[] f = ()
+  UniqueImpl1 a (a ': as) f = f
+  UniqueImpl1 a (b ': as) f = UniqueImpl1 a as f
+type family UniqueImpl0 (a :: [a']) (f :: Constraint) :: Constraint where
+  UniqueImpl0 '[] f = ()
+  UniqueImpl0 (a ': as) f = (UniqueImpl1 a as f, UniqueImpl0 as f)
+type Unique a = UniqueImpl0 a (TypeError (Text "Elements of " :<>: ShowType a :<>: Text " are not unique"))
+
+type family BroadcastConsistentContraint (org :: Shape) (map :: Shape) (targ :: Shape) :: Constraint where
+  BroadcastConsistentContraint '[] '[] _ = ()
+  BroadcastConsistentContraint (o ': os) (m ': ms) targ = (o ~ ShapeNatAt targ m, BroadcastConsistentContraint os ms targ)
+  BroadcastConsistentContraint _ _ _ = TypeError (Text "Given map not of the correct size")
+
+type Broadcast org map targ = (BroadcastConsistentContraint org map targ, Unique map, KnownShape map, KnownShape org, KnownShape targ)
+type Broadcast' org targ = (KnownShape org, KnownShape targ, IsSuffixOf org targ (TypeError (ShowType org :<>: Text " is not a suffix of " :<>: ShowType targ :$$: Text "Maybe use broadcast")))
+
+type family TensorProduct (lhs :: Shape) (rhs :: Shape) :: Shape where
+  TensorProduct '[] rhs = rhs
+  TensorProduct (a ': as) rhs = a ': TensorProduct as rhs
+type TensorProductConstraint l r p = (KnownShape l, KnownShape r, p ~ TensorProduct l r, KnownShape p)
+
+
+
 
 -- Tensorial
 class (Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
@@ -93,3 +145,5 @@ tensorType _ = RankedTensorType shape _type NullAttr
 
 tensorType' :: T s t => Proxy (a s t) -> AnyType 
 tensorType' = toAnyType . tensorType
+
+
