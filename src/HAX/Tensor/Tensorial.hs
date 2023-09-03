@@ -7,8 +7,13 @@
 module HAX.Tensor.Tensorial where
 import HAX.PjRt.BufferType
 
-import HAX.HList
+import HAX.Utils
+
 import Data.Proxy
+import Data.IntMap.Strict (IntMap, empty)
+import Data.Primitive.ByteArray
+import Data.Kind 
+
 import GHC.TypeLits
 
 import Foreign
@@ -18,9 +23,6 @@ import MLIR
 import qualified MLIR.Dialect.Func           as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
-import Data.IntMap.Strict (IntMap, empty)
-import Data.Primitive.ByteArray
-import Data.Kind 
 
 -- Shape
 type Shape = [Nat]
@@ -168,4 +170,18 @@ traceDebug (trace -> (value, (ins, outs))) =
           Func._ReturnOp _out
     moduleDump m
     moduleDestroy m
+
+class TensorOp (a :: Shape -> Type -> Type) where
+  -- Automatic broadcasting
+  broadcast  :: (Broadcast org map targ, Tensorial t) => a org t -> Proxy map -> a targ t
+  broadcast' :: (Broadcast' org targ, Tensorial t) => a org t -> a targ t  
+  
+  -- TODO: Implement + - * / etc with automatic broadcasting
+  prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
+
+  
+
+(|#|) :: (TensorOp a, TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
+(|#|) = prod
+infixl 8 |#|
 

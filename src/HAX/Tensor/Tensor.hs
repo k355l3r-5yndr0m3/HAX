@@ -13,8 +13,6 @@ import HAX.Jit
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.HostBufferSemantics
--- TODO: Might merge HList and Utils
-import HAX.HList
 import HAX.Utils
 
 import Data.Proxy

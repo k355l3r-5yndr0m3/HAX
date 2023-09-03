@@ -6,7 +6,6 @@ import Foreign
 import HAX.Tensor 
 import HAX.PjRt
 import HAX.Jit
-import HAX.Math
 
 import HAX.AD
 import HAX.AD.Reverse

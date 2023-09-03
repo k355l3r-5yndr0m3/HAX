@@ -1,4 +1,4 @@
-module HAX.Tensor.Transform where
+module HAX.Transform where
 import HAX.Tensor.Tensorial
 
 import Data.Int
