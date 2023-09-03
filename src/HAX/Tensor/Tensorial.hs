@@ -116,8 +116,12 @@ instance Tensorial Float where
 
 -- Traceable
 -- NOTE: What the performance difference between IntMap Value being outside/inside tuple
+
+data Tag -- TODO: Find a use for this, 
+data TaggedValue = TaggedValue { getTag :: Tag, getValue :: Value }
+
 class Traceable f where
-  trace' :: CIntPtr -> f -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
+  trace' :: CIntPtr -> f -> (IntMap TaggedValue -> BlockM (IntMap TaggedValue, [Value]), ([AnyType], [AnyType]))
 -- Note since a <+> is a tree, care must be apply when traverse it so flatteninng and inflatting can be consistent
 instance (Traceable a, Traceable b) => Traceable (a <+> b) where
   trace' _ (a :+: b) = (\ t0 -> do 

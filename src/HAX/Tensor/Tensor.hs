@@ -36,10 +36,10 @@ instance Trace Tensor where
 
 instance Trace Tracer where
   auto :: forall s a. T s a => Tensor s a -> Tracer s a
-  auto tensor = Tracer $ \ t0 -> do 
+  auto tensor = Tracer undefined $ \ t0 tf -> do 
     buffer <- blockRunIO $ bufferToHostBuffer $ getUnderlyingBuffer tensor
     let _attr = denseElemsAttr shape buffer (Proxy :: Proxy a)
-    (t0, ) <$> SHLO._ConstantOp _attr _type
+    (t0, ) . TaggedValue undefined <$> SHLO._ConstantOp _attr _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s a))
           shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
 
