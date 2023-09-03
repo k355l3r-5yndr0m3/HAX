@@ -99,6 +99,16 @@ class (Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElem
   unitElement :: a  
   nullElement :: a
 
+type T s t = (KnownShape s, Tensorial t)
+tensorType :: forall a s t. T s t => Proxy (a s t) -> RankedTensorType NullAttr (SHLOType t)
+tensorType _ = RankedTensorType shape _type NullAttr
+  where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+        _type = shloTensorType (Proxy :: Proxy t)
+
+tensorType' :: T s t => Proxy (a s t) -> AnyType 
+tensorType' = toAnyType . tensorType
+
+
 instance Tensorial Float where
   type SHLOType Float = F32Type
   type DenseSplatAttr Float = DenseIntOrFPElements (RankedTensorType NullAttr F32Type) Float
@@ -117,11 +127,9 @@ instance Tensorial Float where
 -- Traceable
 -- NOTE: What the performance difference between IntMap Value being outside/inside tuple
 
-data Tag -- TODO: Find a use for this, 
-data TaggedValue = TaggedValue { getTag :: Tag, getValue :: Value }
 
 class Traceable f where
-  trace' :: CIntPtr -> f -> (IntMap TaggedValue -> BlockM (IntMap TaggedValue, [Value]), ([AnyType], [AnyType]))
+  trace' :: CIntPtr -> f -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
 -- Note since a <+> is a tree, care must be apply when traverse it so flatteninng and inflatting can be consistent
 instance (Traceable a, Traceable b) => Traceable (a <+> b) where
   trace' _ (a :+: b) = (\ t0 -> do 
@@ -141,13 +149,5 @@ trace :: Traceable (a -> b) => (a -> b) -> (BlockM [Value], ([AnyType], [AnyType
 trace f = (fmap snd (_fst empty), _snd)
   where (_fst, _snd) = trace' 0 f
 
-type T s t = (KnownShape s, Tensorial t)
-tensorType :: forall a s t. T s t => Proxy (a s t) -> RankedTensorType NullAttr (SHLOType t)
-tensorType _ = RankedTensorType shape _type NullAttr
-  where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
-        _type = shloTensorType (Proxy :: Proxy t)
-
-tensorType' :: T s t => Proxy (a s t) -> AnyType 
-tensorType' = toAnyType . tensorType
 
 

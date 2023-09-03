@@ -19,6 +19,7 @@ PJRT_Client *client_create(PJRT_Api *api) {
 }
 void client_destroy(PJRT_Api *api, PJRT_Client *client) { API_CALL_CATCHER(Client_Destroy, fatal_error, .client = client); }
 
+
 const char *client_platform_name(PJRT_Api *api, PJRT_Client *client, size_t *platform_name_size_out) {
     auto result = API_CALL_CATCHER(Client_PlatformName, fatal_error, .client = client);
     *platform_name_size_out = result.platform_name_size;
@@ -34,6 +35,10 @@ PJRT_Device **client_addressable_devices(PJRT_Api *api, PJRT_Client *client, siz
 PJRT_Device *client_lookup_addressable_device(PJRT_Api *api, PJRT_Client *client, int id) {
     return API_CALL_CATCHER(Client_LookupAddressableDevice, fatal_error, .client = client, .local_hardware_id = id).addressable_device;
 }
+
+
+
+
 
 
 PJRT_LoadedExecutable *client_compile(PJRT_Api *api, PJRT_Client *client, char *code, size_t code_size, const char *compile_options, size_t compile_options_size) {

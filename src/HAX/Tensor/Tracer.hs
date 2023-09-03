@@ -88,12 +88,12 @@ instance ApplyTransform DotDimensionNumbersAttr where
 
 
 
-data Tracer (s :: Shape) t = Tracer { getLabel :: Word, getTracer :: IntMap TaggedValue -> Transform -> BlockM (IntMap TaggedValue, TaggedValue) }
+data Tracer (s :: Shape) t = Tracer { getLabel :: Word, getTracer :: IntMap Value -> Transform -> BlockM (IntMap Value, Value) }
 -- NOTE: A possible problem with this is that if given a different transformation, it might not 
 --       return the correctly transformed IR, if this Tracer has been passed through with anothet 
 --       Transform prior. But this might not be problem. 
 --       The solution is to include the Transform infomation in the look up key
-sharing :: forall s t. Tracer s t -> IntMap TaggedValue -> Transform -> BlockM (IntMap TaggedValue, TaggedValue)
+sharing :: forall s t. Tracer s t -> IntMap Value -> Transform -> BlockM (IntMap Value, Value)
 sharing tracer table transform = do 
   hash <- blockRunIO (hashStableName <$> (makeStableName $! tracer))
   case lookup hash table of
@@ -119,12 +119,12 @@ capture' top idx tf ranked value
         (ranked', ) <$> SHLO._BroadcastInDimOp _map val (toAnyType ranked')
   | otherwise  = error "Unexpectedly high transformation stack"
 
-capture :: TypeGet (RankedTensorType e t) => Word -> Word -> Transform -> RankedTensorType e t -> (IntMap TaggedValue, TaggedValue) -> BlockM (IntMap TaggedValue, TaggedValue)
+capture :: TypeGet (RankedTensorType e t) => Word -> Word -> Transform -> RankedTensorType e t -> (IntMap Value, Value) -> BlockM (IntMap Value, Value)
 capture top idx tf ranked (tbl, value) = do 
-  (_, value') <- capture' top idx tf ranked (getValue value)
-  return (tbl, value { getValue = value' })
+  (_, value') <- capture' top idx tf ranked value
+  return (tbl, value')
 
-capsha :: forall s t. T s t => Tracer s t -> IntMap TaggedValue -> Transform -> Word -> BlockM (IntMap TaggedValue, TaggedValue)
+capsha :: forall s t. T s t => Tracer s t -> IntMap Value -> Transform -> Word -> BlockM (IntMap Value, Value)
 capsha tracer table tf top = do 
   capture top (getLabel tracer) tf (tensorType (Proxy :: Proxy (Tracer s t))) =<< sharing tracer table tf
 
@@ -135,7 +135,7 @@ instance (KnownShape s, Tensorial t, Num t) => Num (Tracer s t) where
     -- (t2, _rhs) <- sharing rhs t1 tf
     (t1, _lhs) <- capsha lhs t0 tf label
     (t2, _rhs) <- capsha rhs t1 tf label
-    (t2, ) . TaggedValue undefined <$> SHLO._AddOp (getValue _lhs) (getValue _rhs) _type
+    (t2, ) <$> SHLO._AddOp _lhs _rhs _type
     where ranked = tensorType (Proxy :: Proxy (Tracer s t))
           label  = max (getLabel lhs) (getLabel rhs)
 
@@ -144,7 +144,7 @@ instance (KnownShape s, Tensorial t, Num t) => Num (Tracer s t) where
     let _type = toAnyType $ applyTransform tf ranked
     (t1, _lhs) <- capsha lhs t0 tf label
     (t2, _rhs) <- capsha rhs t1 tf label
-    (t2, ) . TaggedValue undefined <$> SHLO._SubtractOp (getValue _lhs) (getValue _rhs) _type
+    (t2, ) <$> SHLO._SubtractOp _lhs _rhs _type
     where ranked = tensorType (Proxy :: Proxy (Tracer s t))
           label  = max (getLabel lhs) (getLabel rhs)
     
@@ -153,34 +153,34 @@ instance (KnownShape s, Tensorial t, Num t) => Num (Tracer s t) where
     let _type = toAnyType $ applyTransform tf ranked
     (t1, _lhs) <- capsha lhs t0 tf label
     (t2, _rhs) <- capsha rhs t1 tf label
-    (t2, ) . TaggedValue undefined <$> SHLO._MulOp (getValue _lhs) (getValue _rhs) _type
+    (t2, ) <$> SHLO._MulOp _lhs _rhs _type
     where ranked = tensorType (Proxy :: Proxy (Tracer s t))
           label  = max (getLabel lhs) (getLabel rhs)
 
   signum operand = Tracer label $ \ t0 (transformTruncate label -> tf) -> do
     let _type = toAnyType $ applyTransform tf ranked
     (t1, _operand) <- sharing operand t0 tf 
-    (t1, ) . TaggedValue undefined <$> SHLO._SignOp (getValue _operand) _type
+    (t1, ) <$> SHLO._SignOp _operand _type
     where ranked = tensorType (Proxy :: Proxy (Tracer s t))
           label  = getLabel operand
 
   negate operand = Tracer label $ \ t0 (transformTruncate label -> tf) -> do 
     let _type = toAnyType $ applyTransform tf ranked
     (t1, _operand) <- sharing operand t0 tf 
-    (t1, ) . TaggedValue undefined <$> SHLO._NegOp (getValue _operand) _type
+    (t1, ) <$> SHLO._NegOp _operand _type
     where ranked = tensorType (Proxy :: Proxy (Tracer s t))
           label  = getLabel operand
 
   abs    operand = Tracer label $ \ t0 (transformTruncate label -> tf) -> do 
     let _type = toAnyType $ applyTransform tf ranked
     (t1, _operand) <- sharing operand t0 tf 
-    (t1, ) . TaggedValue undefined <$> SHLO._AbsOp (getValue _operand) _type
+    (t1, ) <$> SHLO._AbsOp _operand _type
     where ranked = tensorType (Proxy :: Proxy (Tracer s t))
           label  = getLabel operand
 
   fromInteger (fromInteger -> value :: t) = Tracer 0 $ \ t0 _ -> do 
     let _type@(RankedTensorType _shape _ _) = ranked
-    (t0, ) . TaggedValue undefined <$> SHLO._ConstantOp (denseSplatAttr _shape value) (toAnyType _type)
+    (t0, ) <$> SHLO._ConstantOp (denseSplatAttr _shape value) (toAnyType _type)
     where ranked = tensorType (Proxy :: Proxy (Tracer s t))
 
 instance (T s t, Fractional t) => Fractional (Tracer s t) where
@@ -188,13 +188,13 @@ instance (T s t, Fractional t) => Fractional (Tracer s t) where
     let _type = toAnyType $ applyTransform tf ranked
     (t1, _lhs) <- capsha lhs t0 tf label
     (t2, _rhs) <- capsha rhs t1 tf label
-    (t2, ) . TaggedValue undefined <$> SHLO._DivOp (getValue _lhs) (getValue _rhs) _type
+    (t2, ) <$> SHLO._DivOp _lhs _rhs _type
     where ranked = tensorType (Proxy :: Proxy (Tracer s t))
           label  = max (getLabel lhs) (getLabel rhs)
 
   fromRational (fromRational -> value :: t) = Tracer 0 $ \ t0 _ -> do 
     let _type@(RankedTensorType _shape _ _) = ranked
-    (t0, ) . TaggedValue undefined <$> SHLO._ConstantOp (denseSplatAttr _shape value) (toAnyType _type)
+    (t0, ) <$> SHLO._ConstantOp (denseSplatAttr _shape value) (toAnyType _type)
     where ranked = tensorType (Proxy :: Proxy (Tracer s t))
 
 instance TensorOp Tracer where
@@ -203,7 +203,7 @@ instance TensorOp Tracer where
     let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer targ t))
         _map  = applyTransform tf $ getBroadcastMap p
     (t1, _org) <- sharing org t0 tf
-    (t1, ) . TaggedValue undefined <$> SHLO._BroadcastInDimOp _map (getValue _org) _type
+    (t1, ) <$> SHLO._BroadcastInDimOp _map _org _type
     where label = getLabel org
 
   broadcast' :: forall org targ t. (Broadcast' org targ, Tensorial t) => Tracer org t -> Tracer targ t  
@@ -211,7 +211,7 @@ instance TensorOp Tracer where
     let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer targ t))
         _map  = applyTransform tf $ BroadcastMap $ take (fromIntegral orgRank) [targRank - orgRank..]
     (t1, _org) <- sharing org t0 tf
-    (t1, ) . TaggedValue undefined <$> SHLO._BroadcastInDimOp _map (getValue _org) _type 
+    (t1, ) <$> SHLO._BroadcastInDimOp _map _org _type 
       where orgRank              = fromInteger $ shapeRank (Proxy :: Proxy org)
             targRank             = fromInteger $ shapeRank (Proxy :: Proxy targ)
             label                = getLabel org
@@ -222,18 +222,18 @@ instance TensorOp Tracer where
         _attr = applyTransform tf $ DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [] }
     (t1, _lhs) <- capsha lhs t0 tf label
     (t2, _rhs) <- capsha rhs t1 tf label
-    (t2, ) . TaggedValue undefined <$> SHLO._DotGeneralOp _attr Nothing (getValue _lhs) (getValue _rhs) _type -- This might not work
+    (t2, ) <$> SHLO._DotGeneralOp _attr Nothing _lhs _rhs _type -- This might not work
     where label = max (getLabel lhs) (getLabel rhs)
 
 
 instance T s t => Traceable (Tracer s t) where
-  trace' _ u = (fmap (fmap (singleton . getValue)) . (\x -> sharing u x Id), ([], [_type]))
+  trace' _ u = (fmap (fmap singleton) . (\x -> sharing u x Id), ([], [_type]))
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 
 instance (T s t, Traceable f) => Traceable (Tracer s t -> f) where 
   trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
-    where argn = Tracer 0 (\ a tf -> assert (tf == Id) $ (a, ) . TaggedValue undefined <$> blockArg i) 
+    where argn = Tracer 0 (\ a tf -> assert (tf == Id) $ (a, ) <$> blockArg i) 
           _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 
