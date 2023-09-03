@@ -1,13 +1,13 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
 module HAX.Tensor.Tracer where
 import Prelude hiding (lookup)
 
 import HAX.Math 
 import HAX.Tensor.Tensorial
+import HAX.Tensor.Transform
 
 import HAX.HList
 import HAX.Jit
@@ -17,13 +17,11 @@ import Data.List (singleton)
 import Data.Proxy
 import Data.Bifunctor
 
-import Foreign
 
 import GHC.StableName
 import GHC.TypeLits
 
 import MLIR
-import qualified MLIR.Dialect.Func as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
 import Control.Exception (assert)
@@ -32,61 +30,6 @@ import Control.Exception (assert)
 -- Passing through the returned BlockM monad is more elegant, but it emposes limits. Since sharing checking is 
 --    evaluated before the monand, there is no way to share value
 -- Passing through data structure might be better, but sharing might still be impossible
-
-newtype BroadcastMap = BroadcastMap [Word64]
-instance AttrGet BroadcastMap where 
-  attrGet (BroadcastMap mapping) = 
-    attrGet (DenseIntOrFPElements (VectorType [fromIntegral $ length mapping] I64) mapping)
-instance DenseIntOrFPElementsAttr BroadcastMap
-instance DenseIntElementsAttr BroadcastMap
-
-getBroadcastMap :: KnownShape s => Proxy s -> BroadcastMap
-getBroadcastMap = BroadcastMap . fmap fromInteger . shapeVal
-
-data Transform = Id | V Int64 Transform deriving Eq
-transformHeight :: Transform -> Word
-transformHeight t = 
-  case t of 
-    Id     -> 0
-    V _ t' -> 1 + transformHeight t'
-
-transformTruncate :: Word -> Transform -> Transform
-transformTruncate label tf = truncation tf (height - label)
-  where height = transformHeight tf
-        truncation :: Transform -> Word -> Transform
-        truncation t 0 = t
-        truncation t i = truncation (
-          case t of 
-            Id    -> error "Unexpectedly short transformation stack"
-            V _ o -> o) (i - 1)
-
-
-class ApplyTransform a where
-  applyTransform :: Transform -> a -> a
-instance ApplyTransform (RankedTensorType t e) where
-  applyTransform tf r@(RankedTensorType shape t e) = 
-    case tf of 
-      Id          -> r
-      V dim other -> applyTransform other (RankedTensorType (dim:shape) t e)
-instance ApplyTransform BroadcastMap where
-  applyTransform tf b@(BroadcastMap idxmap) = 
-    case tf of 
-      Id          -> b
-      V _ other   -> applyTransform other (BroadcastMap (0:fmap (+1) idxmap))
-
-instance ApplyTransform DotDimensionNumbersAttr where
-  applyTransform tf d = 
-    case tf of 
-      Id          -> d
-      V _ other   -> 
-        let incr (x, y) = (x + 1, y + 1)
-            d' = d { getBatchingDims = (0,0):fmap incr (getBatchingDims d),
-                     getContractingDims = fmap incr (getContractingDims d)}
-        in  applyTransform other d'
-
-
-
-
 
 data Tracer (s :: Shape) t = Tracer { getLabel :: Word, getTracer :: IntMap Value -> Transform -> BlockM (IntMap Value, Value) }
 -- NOTE: A possible problem with this is that if given a different transformation, it might not 
@@ -237,21 +180,6 @@ instance (T s t, Traceable f) => Traceable (Tracer s t -> f) where
           _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 
-traceDebug :: Traceable (a -> b) => (a -> b) -> IO ()
-traceDebug (trace -> (value, (ins, outs))) = 
-  runContextM $ do 
-    loadDialect_ Func.dialect
-    loadDialect_ SHLO.dialect
-    m <- moduleOp $ do 
-      Func._FuncOp "main"
-                   (TypeAttr $ FunctionType ins outs)
-                   Nothing Nothing Nothing $ do 
-        bb0 <- blockGet ins
-        blockDef bb0 $ do 
-          _out <- value 
-          Func._ReturnOp _out
-    moduleDump m
-    moduleDestroy m
 
 
 type JitTracer f = (Jit Tracer f, f ~ JitCache Tracer f)

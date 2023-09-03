@@ -2,6 +2,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE OverloadedStrings #-}
 module HAX.Tensor.Tensorial where
 import HAX.PjRt.BufferType
 
@@ -13,6 +15,9 @@ import Foreign
 import Foreign.C
 
 import MLIR 
+import qualified MLIR.Dialect.Func           as Func
+import qualified Stablehlo.Dialect.Stablehlo as SHLO
+
 import Data.IntMap.Strict (IntMap, empty)
 import Data.Primitive.ByteArray
 import Data.Kind 
@@ -126,8 +131,6 @@ instance Tensorial Float where
 
 -- Traceable
 -- NOTE: What the performance difference between IntMap Value being outside/inside tuple
-
-
 class Traceable f where
   trace' :: CIntPtr -> f -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
 -- Note since a <+> is a tree, care must be apply when traverse it so flatteninng and inflatting can be consistent
@@ -150,4 +153,19 @@ trace f = (fmap snd (_fst empty), _snd)
   where (_fst, _snd) = trace' 0 f
 
 
+traceDebug :: Traceable (a -> b) => (a -> b) -> IO ()
+traceDebug (trace -> (value, (ins, outs))) = 
+  runContextM $ do 
+    loadDialect_ Func.dialect
+    loadDialect_ SHLO.dialect
+    m <- moduleOp $ do 
+      Func._FuncOp "main"
+                   (TypeAttr $ FunctionType ins outs)
+                   Nothing Nothing Nothing $ do 
+        bb0 <- blockGet ins
+        blockDef bb0 $ do 
+          _out <- value 
+          Func._ReturnOp _out
+    moduleDump m
+    moduleDestroy m
 
