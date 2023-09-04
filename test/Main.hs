@@ -1,25 +1,25 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 module Main (main) where
-import Foreign
 
 import HAX.Tensor 
 import HAX.PjRt
-import HAX.Jit
+-- import HAX.Jit
+-- 
+-- import HAX.AD
+-- import HAX.AD.Reverse
+-- 
+-- import Data.Proxy
+-- 
+-- type TestDim = '[2]
+-- 
+-- testing :: Num a => a -> a -> a
+-- testing x y = x * y + x
 
-import HAX.AD
-import HAX.AD.Reverse
-
-import Data.Proxy
-
-type TestDim = '[2]
-
-testing :: Num a => a -> a -> a
-testing x y = x * y + x
-
-vmaptest :: Tracer '[5, 4] Float -> Tracer '[5, 4] Float -> Tracer '[4] Float -> Tracer '[5, 4] Float 
-vmaptest x y z = vmap (\a b -> z') (x - y) (y - x)
+vmaptest :: Tracer '[5, 4] Float -> Tracer '[5, 6] Float -> Tracer '[4, 6] Float -> Tracer '[5, 4, 6] Float 
+vmaptest x y z = vmap (\ lhs rhs -> lhs |#| rhs + z') x y
   where z' = signum z
+
 
 main :: IO ()
 main = do 

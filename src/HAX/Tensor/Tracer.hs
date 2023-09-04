@@ -7,7 +7,7 @@ import Prelude hiding (lookup)
 
 import HAX.Math 
 import HAX.Tensor.Tensorial
-import HAX.Transform
+import HAX.Tensor.Transform
 
 import HAX.Utils
 import HAX.Jit
@@ -26,10 +26,6 @@ import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
 import Control.Exception (assert)
 
--- Three mode of infomation transfer, through input and through output, or through the data itself
--- Passing through the returned BlockM monad is more elegant, but it emposes limits. Since sharing checking is 
---    evaluated before the monand, there is no way to share value
--- Passing through data structure might be better, but sharing might still be impossible
 
 data Tracer (s :: Shape) t = Tracer { getTag :: Word, getTracer :: IntMap Value -> Transform -> BlockM (IntMap Value, Value) }
 -- NOTE: A possible problem with this is that if given a different transformation, it might not 
@@ -163,11 +159,69 @@ instance TensorOp Tracer where
     (t2, ) <$> SHLO._DotGeneralOp _attr Nothing _lhs _rhs _type -- This might not work
     where tag   = max (getTag lhs) (getTag rhs)
 
+instance (T s t, Floating t) => Floating (Tracer s t) where
+  pi = Tracer 0 $ \ t0 _ -> do 
+    let _type@(RankedTensorType _shape _ _) = ranked
+    (t0, ) <$> SHLO._ConstantOp (denseSplatAttr _shape (pi :: t)) (toAnyType _type)
+    where ranked = tensorType (Proxy :: Proxy (Tracer s t))
+  
+  exp operand = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
+    let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer s t))
+    (t1, _operand) <- sharing operand t0 tf
+    (t1, ) <$> SHLO._ExpOp _operand _type
+    where tag = getTag operand 
+
+  log operand = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
+    let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer s t))
+    (t1, _operand) <- sharing operand t0 tf
+    (t1, ) <$> SHLO._LogOp _operand _type
+    where tag = getTag operand 
+
+  sqrt operand = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
+    let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer s t))
+    (t1, _operand) <- sharing operand t0 tf
+    (t1, ) <$> SHLO._SqrtOp _operand _type
+    where tag = getTag operand 
+
+  lhs ** rhs = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
+    let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer s t))
+    (t1, _lhs) <- takevar lhs t0 tf tag
+    (t2, _rhs) <- takevar rhs t1 tf tag
+    (t2, ) <$> SHLO._PowOp _lhs _rhs _type
+    where tag = max (getTag lhs) (getTag rhs)
+  
+  sin operand = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
+    let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer s t))
+    (t1, _operand) <- sharing operand t0 tf
+    (t1, ) <$> SHLO._SineOp _operand _type
+    where tag = getTag operand 
+
+  cos operand = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
+    let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer s t))
+    (t1, _operand) <- sharing operand t0 tf
+    (t1, ) <$> SHLO._CosineOp _operand _type
+    where tag = getTag operand 
+
+  tanh operand = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
+    let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer s t))
+    (t1, _operand) <- sharing operand t0 tf
+    (t1, ) <$> SHLO._TanhOp _operand _type
+    where tag = getTag operand 
+
+  asin = error "No equivalent stablehlo operation"
+  acos = error "No equivalent stablehlo operation"
+  atan = error "No equivalent stablehlo operation"
+  
+  sinh = error "No equivalent stablehlo operation"
+  cosh = error "No equivalent stablehlo operation"
+  
+  asinh = error "No equivalent stablehlo operation"
+  acosh = error "No equivalent stablehlo operation"
+  atanh = error "No equivalent stablehlo operation"
 
 instance T s t => Traceable (Tracer s t) where
   trace' _ u = (fmap (fmap singleton) . (\x -> sharing u x Id), ([], [_type]))
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
 
 instance (T s t, Traceable f) => Traceable (Tracer s t -> f) where 
   trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
@@ -212,11 +266,6 @@ instance (T s t, JitTracer f) => Jit Tracer (Tracer s t -> f) where
   jitInit = id
   jitReify = undefined
 
-
-class VMap f where 
-  type Vectorized (i :: Nat) f = f' | f' -> f i
-  vmap' :: forall (i :: Nat). KnownNat i => Word -> (Word -> f) -> Vectorized i f
-
 instance T s t => VMap (Tracer s t) where
   type Vectorized i (Tracer s t) = Tracer (i ': s) t
 
@@ -235,7 +284,4 @@ instance (T s t, VMap f) => VMap (Tracer s t -> f) where
                     V _ tf' -> sharing arg tbl tf' 
                     _       -> error "Unexpected transformation stack"
             in  delayed tag   arg'
-
-vmap :: (VMap (a -> b), KnownNat i) => (a -> b) -> Vectorized i (a -> b)
-vmap f = vmap' 0 (const f)
 

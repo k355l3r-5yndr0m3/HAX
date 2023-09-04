@@ -1,15 +1,17 @@
-module HAX.Transform where
+{-# LANGUAGE TypeFamilyDependencies #-}
+module HAX.Tensor.Transform where
 import HAX.Tensor.Tensorial
 
 import Data.Int
 import Data.Word
 import Data.Proxy
 
+import GHC.TypeLits
+
 import MLIR
 import Stablehlo.Dialect.Stablehlo.Attributes
 
 data Transform = Id | V Int64 Transform deriving Eq
-
 
 transformHeight :: Transform -> Word
 transformHeight t = 
@@ -62,3 +64,12 @@ instance ApplyTransform DotDimensionNumbersAttr where
             d' = d { getBatchingDims = (0,0):fmap incr (getBatchingDims d),
                      getContractingDims = fmap incr (getContractingDims d)}
         in  applyTransform other d'
+
+
+
+class VMap f where 
+  type Vectorized (i :: Nat) f = f' | f' -> f i
+  vmap' :: forall (i :: Nat). KnownNat i => Word -> (Word -> f) -> Vectorized i f
+
+vmap :: (VMap (a -> b), KnownNat i) => (a -> b) -> Vectorized i (a -> b)
+vmap f = vmap' 0 (const f)

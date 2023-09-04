@@ -83,6 +83,19 @@ type family TensorProduct (lhs :: Shape) (rhs :: Shape) :: Shape where
 type TensorProductConstraint l r p = (KnownShape l, KnownShape r, p ~ TensorProduct l r, KnownShape p)
 
 
+-- Tensor operation
+class TensorOp (a :: Shape -> Type -> Type) where
+  -- Automatic broadcasting
+  broadcast  :: (Broadcast org map targ, Tensorial t) => a org t -> Proxy map -> a targ t
+  broadcast' :: (Broadcast' org targ, Tensorial t) => a org t -> a targ t  
+  
+  -- TODO: Implement + - * / etc with automatic broadcasting
+  prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
+
+
+(|#|) :: (TensorOp a, TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
+(|#|) = prod
+infixl 8 |#|
 
 
 -- Tensorial
@@ -170,18 +183,4 @@ traceDebug (trace -> (value, (ins, outs))) =
           Func._ReturnOp _out
     moduleDump m
     moduleDestroy m
-
-class TensorOp (a :: Shape -> Type -> Type) where
-  -- Automatic broadcasting
-  broadcast  :: (Broadcast org map targ, Tensorial t) => a org t -> Proxy map -> a targ t
-  broadcast' :: (Broadcast' org targ, Tensorial t) => a org t -> a targ t  
-  
-  -- TODO: Implement + - * / etc with automatic broadcasting
-  prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
-
-  
-
-(|#|) :: (TensorOp a, TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
-(|#|) = prod
-infixl 8 |#|
 

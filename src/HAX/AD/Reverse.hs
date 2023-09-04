@@ -38,3 +38,14 @@ instance Fractional t => Fractional (Reverse t) where
 
   fromRational r = 
     Reverse (fromRational r) (const zero)
+
+instance Floating t => Floating (Reverse t) where
+  pi = Reverse pi (const zero)
+  exp (Reverse f f') = Reverse (exp f) (\ i -> f' (i * exp f))
+  log (Reverse f f') = Reverse (log f) (\ i -> f' (i / f))
+  sqrt (Reverse f f') = Reverse (sqrt f) (\ i -> f' (i / (2 * sqrt f)))
+  (Reverse f f') ** (Reverse g g') = 
+    Reverse (f ** g) (\ i -> f' (i * g * (f ** (g - 1))) <+> g' (i * (f ** g) * log f))
+  sin (Reverse f f') = Reverse (sin f) (\ i -> f' (i * cos f))
+  cos (Reverse f f') = Reverse (cos f) (\ i -> f' (negate (i * sin f)))
+  tanh (Reverse f f') = Reverse (tanh f) (\ i -> f' (i * (1 - tanh f ** 2)))

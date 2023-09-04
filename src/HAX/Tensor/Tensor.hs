@@ -8,12 +8,12 @@ import Prelude hiding (lookup)
 import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
 
-import HAX.Math 
 import HAX.Jit
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.HostBufferSemantics
 import HAX.Utils
+import HAX.AD.Numerical
 
 import Data.Proxy
 import Data.Kind
@@ -107,7 +107,7 @@ instance T s t => Jit Tensor (Tracer s t) where
   type JitCache  Tensor (Tracer s t) = JitCacheTensor (Tracer s t)
 
   jit' (argumentStack, executable, _) = assert (null excess) output
-    where (output, excess) = (jitReify . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing 1)
+    where (output, excess) = (jitReify . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack (Just defaultDevice) 1)
 
   jitInit _ = error "jitInit was not given a function"
 
@@ -142,7 +142,7 @@ instance (T s t, JitTensor f) => Jit Tensor (Tracer s t -> f) where
 jit :: forall f a b. (f ~ (a -> b), JitTracer f, JitTensor f) => f -> Jit' f
 jit f = jit' (jitInit f)
 
-instance (KnownShape s, Tensorial t, Num t) => Num (Tensor s t) where
+instance (T s t, Num t) => Num (Tensor s t) where
   (+) = jit (+)
   (-) = jit (-)
   (*) = jit (*)
@@ -151,13 +151,32 @@ instance (KnownShape s, Tensorial t, Num t) => Num (Tensor s t) where
   abs    = jit abs
   negate = jit negate
 
-  fromInteger = error "This is problematic"
+  fromInteger (fromInteger -> value :: t) = unsafePerformIO $ splat defaultDevice value
 
-instance (KnownShape s, Tensorial t, Fractional t) => Fractional (Tensor s t) where
+instance (T s t, Fractional t) => Fractional (Tensor s t) where
   (/) = jit (/)
   recip = jit recip
 
-  fromRational = error "This is problematic"
+  fromRational (fromRational -> value :: t) = unsafePerformIO $ splat defaultDevice value
+
+instance (T s t, Floating t) => Floating (Tensor s t) where
+  pi = unsafePerformIO $ splat defaultDevice (pi :: t)
+  exp = jit exp
+  log = jit log
+  sqrt = jit sqrt
+  (**) = jit (**)  
+  sin = jit sin
+  cos = jit cos
+  tanh = jit tanh
+  asin = error "No equivalent stablehlo operation"
+  acos = error "No equivalent stablehlo operation"
+  atan = error "No equivalent stablehlo operation"
+  sinh = error "No equivalent stablehlo operation"
+  cosh = error "No equivalent stablehlo operation"
+  asinh = error "No equivalent stablehlo operation"
+  acosh = error "No equivalent stablehlo operation"
+  atanh = error "No equivalent stablehlo operation"
+  
 
 instance TensorOp Tensor where
   broadcast :: forall t (org :: Shape) (map :: Shape) (targ :: Shape). (Broadcast org map targ, Tensorial t) => Tensor org t -> Proxy map -> Tensor targ t
@@ -168,3 +187,8 @@ instance TensorOp Tensor where
 
   prod :: forall l r p t. (TensorProductConstraint l r p, Tensorial t) => Tensor l t -> Tensor r t -> Tensor p t
   prod = jit prod
+
+
+instance (T s t, Fractional t) => Delta (Tensor s t) where
+  type Scalar (Tensor s t) = t
+  scalarDelta _ = 0.0001 -- TODO: Choose another constant, one that is less arbitrary
