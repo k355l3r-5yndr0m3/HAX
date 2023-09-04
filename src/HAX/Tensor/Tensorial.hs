@@ -11,32 +11,34 @@ import HAX.Utils
 
 import Data.Proxy
 import Data.IntMap.Strict (IntMap, empty)
-import Data.Primitive.ByteArray
+import Data.Primitive
 import Data.Kind 
+import Data.Int
 
 import GHC.TypeLits
 
-import Foreign
 import Foreign.C
 
 import MLIR 
 import qualified MLIR.Dialect.Func           as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
-
 -- Shape
 type Shape = [Nat]
 class KnownShape (s :: Shape) where
   shapeVal :: Proxy s -> [Integer]
   shapeRank :: Proxy s -> Integer
+  shapeValHead :: Proxy s -> Integer
   
 instance KnownShape '[] where
   shapeVal _ = []
   shapeRank _ = 0
+  shapeValHead = error "Shape is of rank 0"
 
 instance (KnownNat a, KnownShape as) => KnownShape (a ': as) where
   shapeVal _ = natVal (Proxy :: Proxy a) : shapeVal (Proxy :: Proxy as)
   shapeRank _ = 1 + shapeRank (Proxy :: Proxy as)
+  shapeValHead _ = natVal (Proxy :: Proxy a)
 
 type family ReverseListImpl (retro :: [a]) (pro :: [a]) :: [a] where
   ReverseListImpl r '[] = r
@@ -83,6 +85,7 @@ type family TensorProduct (lhs :: Shape) (rhs :: Shape) :: Shape where
 type TensorProductConstraint l r p = (KnownShape l, KnownShape r, p ~ TensorProduct l r, KnownShape p)
 
 
+
 -- Tensor operation
 class TensorOp (a :: Shape -> Type -> Type) where
   -- Automatic broadcasting
@@ -91,6 +94,7 @@ class TensorOp (a :: Shape -> Type -> Type) where
   
   -- TODO: Implement + - * / etc with automatic broadcasting
   prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
+  dot  :: (T s t, Num t) => a s t -> a s t -> a '[] t
 
 
 (|#|) :: (TensorOp a, TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
@@ -99,7 +103,7 @@ infixl 8 |#|
 
 
 -- Tensorial
-class (Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
+class (Prim a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
   type SHLOType a
   type DenseSplatAttr a
   type DenseElemsAttr a
@@ -127,7 +131,6 @@ tensorType _ = RankedTensorType shape _type NullAttr
 
 tensorType' :: T s t => Proxy (a s t) -> AnyType 
 tensorType' = toAnyType . tensorType
-
 
 instance Tensorial Float where
   type SHLOType Float = F32Type

@@ -1,9 +1,7 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnliftedFFITypes #-}
-{-# LANGUAGE ViewPatterns #-}
 module HAX.PjRt.Buffer (
---  bufferDestroy 
   bufferDestroy__ptr
 , bufferToHostBuffer
 ) where
@@ -29,6 +27,6 @@ foreign import ccall unsafe "buffer_to_host_buffer__event_await"
 bufferToHostBuffer :: Ptr Api -> Ptr Buffer -> IO ByteArray
 bufferToHostBuffer api buffer = do 
   dstSize               <- c__bufferToHostBuffer__getDstSize api buffer nullPtr
-  MutableByteArray dst# <- newByteArray $ fromIntegral dstSize
+  MutableByteArray dst# <- newPinnedByteArray $ fromIntegral dstSize
   c__bufferToHostBuffer__eventAwait api buffer nullPtr dst# dstSize 
   unsafeFreezeByteArray (MutableByteArray dst#)

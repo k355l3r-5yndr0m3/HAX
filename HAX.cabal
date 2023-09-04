@@ -71,6 +71,7 @@ library
                       HAX.PjRt
                       HAX.Tensor
                       HAX.AD
+                      HAX.AD.Numerical
                       HAX.AD.Reverse
                       HAX.AD.Gradient
                       HAX.Jit

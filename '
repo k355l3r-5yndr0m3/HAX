@@ -15,7 +15,6 @@ import Data.IntMap.Strict hiding (singleton)
 import Data.List (singleton)
 import Data.Proxy
 import Data.Bifunctor
-import Data.Int
 
 import GHC.StableName
 import GHC.TypeLits
@@ -44,21 +43,16 @@ sharing tracer table transform = do
 
 -- NOTE: This does not share intermediate value, which is something to fix
 capture' :: TypeGet (RankedTensorType e t) => Word -> Word -> Transform -> RankedTensorType e t -> Value -> BlockM (RankedTensorType e t, Value)
-capture' top idx tf ranked@(RankedTensorType shape t e) value
+capture' top idx tf ranked value
   | top == idx = return (ranked, value)
   | top >  idx = 
     case tf of 
       Id          -> error "Unexpectedly short transformation stack"
       V dim other -> do 
-        -- NOTE: Stupid code, the order of transforms to be applied is opposite
-        -- (RankedTensorType shape t e, val) <- capture' (top - 1) idx other ranked value 
-        -- let _map    = BroadcastMap $ take (length shape) [1..]
-        --     ranked' = RankedTensorType (dim:shape) t e
-        -- (ranked', ) <$> SHLO._BroadcastInDimOp _map val (toAnyType ranked')
+        (RankedTensorType shape t e, val) <- capture' (top - 1) idx other ranked value
         let _map    = BroadcastMap $ take (length shape) [1..]
             ranked' = RankedTensorType (dim:shape) t e
-        value' <- SHLO._BroadcastInDimOp _map value (toAnyType ranked')
-        capture' (top - 1) idx other ranked' value'
+        (ranked', ) <$> SHLO._BroadcastInDimOp _map val (toAnyType ranked')
   | otherwise  = error "Unexpectedly high transformation stack"
 
 capture :: TypeGet (RankedTensorType e t) => Word -> Word -> Transform -> RankedTensorType e t -> (IntMap Value, Value) -> BlockM (IntMap Value, Value)
@@ -168,12 +162,9 @@ instance TensorOp Tracer where
   dot  :: forall s t. (T s t, Num t) => Tracer s t -> Tracer s t -> Tracer '[] t
   dot lhs rhs = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
     let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer '[] t))
-        _attr = applyTransform tf $ DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = take rank [(i, i) | i <- [0..]] }
-    (t1, _lhs) <- takevar lhs t0 tf tag
-    (t2, _rhs) <- takevar rhs t1 tf tag
-    (t2, ) <$> SHLO._DotGeneralOp _attr Nothing _lhs _rhs _type
+    undefined
     where tag   = max (getTag lhs) (getTag rhs)
-          rank  = length $ shapeVal (Proxy :: Proxy s)
+
 
 instance (T s t, Floating t) => Floating (Tracer s t) where
   pi = Tracer 0 $ \ t0 _ -> do 

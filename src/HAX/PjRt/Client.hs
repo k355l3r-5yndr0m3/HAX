@@ -44,8 +44,8 @@ clientPlatformName api client = alloca $ \sizePtr -> do
   peekCStringLen (name, size)
 
 
-foreign import ccall unsafe "client_default_device_assignment"
-  clientDefaultDeviceAssignment :: Ptr Api -> Ptr Client -> CInt -> CInt -> CSize -> Ptr CInt -> IO ()
+-- foreign import ccall unsafe "client_default_device_assignment"
+--   clientDefaultDeviceAssignment :: Ptr Api -> Ptr Client -> CInt -> CInt -> CSize -> Ptr CInt -> IO ()
 
 
 foreign import ccall unsafe "client_compile"
@@ -74,16 +74,16 @@ clientAddressableDevices api client = alloca $ \numPtr -> do
 
 foreign import ccall unsafe "client_buffer_from_host_buffer"
   c__clientBufferFromHostBuffer :: Ptr Api -> Ptr Client -> 
-                                   Ptr a -> BufferType -> 
+                                   ByteArray# -> BufferType -> 
                                    Ptr Int64 -> CSize -> 
                                    Ptr Int64 -> CSize -> 
                                    HostBufferSemantics -> Ptr Device -> 
                                    Ptr MemoryLayout -> 
                                    Ptr (Ptr Event) -> IO (Ptr Buffer)
-clientBufferFromHostBuffer :: Ptr Api -> Ptr Client -> Ptr a -> BufferType -> ShapeInfo -> HostBufferSemantics -> Ptr Device -> IO (Ptr Event, Ptr Buffer)
-clientBufferFromHostBuffer api client hostBuffer bufferType shapeInfo hostBufferSematics device = 
+clientBufferFromHostBuffer :: Ptr Api -> Ptr Client -> ByteArray# -> BufferType -> ShapeInfo -> HostBufferSemantics -> Ptr Device -> IO (Ptr Event, Ptr Buffer)
+clientBufferFromHostBuffer api client hostBuffer# bufferType shapeInfo hostBufferSematics device = 
   withShapeInfo shapeInfo $ \ (dims, numDims) (bytestrides, numBytestrides) -> alloca $ \ eventPtr -> do
-    deviceBuffer       <- c__clientBufferFromHostBuffer api client hostBuffer bufferType dims numDims bytestrides numBytestrides hostBufferSematics device nullPtr eventPtr 
+    deviceBuffer       <- c__clientBufferFromHostBuffer api client hostBuffer# bufferType dims numDims bytestrides numBytestrides hostBufferSematics device nullPtr eventPtr 
     doneWithHostBuffer <- peek eventPtr
     return (doneWithHostBuffer, deviceBuffer)
   where withShapeInfo :: ShapeInfo -> ((Ptr Int64, CSize) -> (Ptr Int64, CSize) -> IO b) -> IO b

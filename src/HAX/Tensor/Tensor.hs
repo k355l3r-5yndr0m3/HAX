@@ -2,6 +2,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE MagicHash #-}
 module HAX.Tensor.Tensor where
 import Prelude hiding (lookup)
 
@@ -15,17 +16,19 @@ import HAX.PjRt.HostBufferSemantics
 import HAX.Utils
 import HAX.AD.Numerical
 
+import Control.Exception
+
 import Data.Proxy
 import Data.Kind
 import Data.Primitive
 
-import Foreign hiding (sizeOf)
 import GHC.IO.Unsafe (unsafePerformIO)
+import GHC.IsList
+
 import MLIR
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
-import Control.Exception (assert)
 
-newtype Tensor (s :: Shape) a = Tensor { getUnderlyingBuffer :: Buffer }
+newtype Tensor (s :: Shape) a = Tensor { getBuffer :: Buffer }
 class Trace (t :: Shape -> Type -> Type) where
   auto :: forall s a. T s a => Tensor s a -> t s a
 
@@ -35,13 +38,14 @@ instance Trace Tensor where
 instance Trace Tracer where
   auto :: forall s a. T s a => Tensor s a -> Tracer s a
   auto tensor = Tracer 0 $ \ t0 _ -> do 
-    buffer <- blockRunIO $ bufferToHostBuffer $ getUnderlyingBuffer tensor
+    buffer <- blockRunIO $ bufferToHostBuffer $ getBuffer tensor
     let _attr = denseElemsAttr shape buffer (Proxy :: Proxy a)
     (t0, ) <$> SHLO._ConstantOp _attr _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s a))
           shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
 
 -- Pretty print tensor
+-- TODO: Extend this to work with other layout
 instance (T s a, Show a, Prim a) => Show (Tensor s a) where
   show (Tensor b) = unsafePerformIO $ do
     hostbuff <- bufferToHostBuffer b
@@ -63,33 +67,81 @@ instance (T s a, Show a, Prim a) => Show (Tensor s a) where
               in  formater offs' ((idx - 1, ext):ies) buf s'
 
 
-
-
-tensorFromHostBuffer :: forall s a. (KnownShape s, Tensorial a) => Device -> Ptr a -> IO (Tensor s a)
-tensorFromHostBuffer device buffer = Tensor <$> do 
-  (e, b) <- clientBufferFromHostBuffer client buffer (pjrtBufferType p) (Shape shape) kImmutableOnlyDuringCall device
+tensorFromHostBuffer :: forall s t. T s t => Device -> PrimArray t -> IO (Tensor s t)
+tensorFromHostBuffer device buffer = assert (isPrimArrayPinned buffer) Tensor <$> do 
+  (e, b) <- clientBufferFromHostBuffer client (primArrayToByteArray buffer) (pjrtBufferType p) (Shape shape) kImmutableOnlyDuringCall device
   eventAwait e
   return b
-  where p = Proxy :: Proxy a
+  where p = Proxy :: Proxy t
         shape = fromIntegral <$> shapeVal (Proxy :: Proxy s)
+        primArrayToByteArray :: PrimArray a -> ByteArray
+        primArrayToByteArray (PrimArray a#) = ByteArray a#
 
-unity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
-unity device = withArray bufferData $ \ buffer -> 
-  tensorFromHostBuffer device buffer
-  where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) unitElement
+tensorToHostBuffer :: forall s t. T s t => Tensor s t -> IO (PrimArray t)
+tensorToHostBuffer tensor = do 
+  ByteArray byteArray# <- bufferToHostBuffer (getBuffer tensor)
+  return $ PrimArray byteArray#
 
+unity :: forall s a. T s a => Device -> IO (Tensor s a)
+unity = (`splat` unitElement)
         
-nullity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
-nullity device = withArray bufferData $ \ buffer -> 
-  tensorFromHostBuffer device buffer 
-  where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) nullElement
+nullity :: forall s a. T s a => Device -> IO (Tensor s a)
+nullity = (`splat` nullElement)
 
-splat :: forall s a. (KnownShape s, Tensorial a) => Device -> a -> IO (Tensor s a)
-splat device a = withArray (replicate elemCount a) $ \ a' -> 
-  tensorFromHostBuffer device a'
-  where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
-  
+splat :: forall s a. T s a => Device -> a -> IO (Tensor s a)
+splat device a = tensorFromHostBuffer device $ primArrayFromList $ replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) a
 
+-- TODO: Figure out how to extend this to n-rank
+-- instance T '[r0] t => IsList (Tensor '[r0] t) where
+--   type Item (Tensor '[r0] t) = t
+--   fromList content = unsafePerformIO $ tensorFromHostBuffer defaultDevice (primArrayFromList padded)
+--     where shape  = fromInteger <$> shapeVal (Proxy :: Proxy '[r0])
+--           padded = take (last shape) (content ++ repeat nullElement)
+--   toList tensor = unsafePerformIO $ primArrayToList <$> tensorToHostBuffer tensor
+-- 
+-- instance T '[r1, r0] t => IsList (Tensor '[r1, r0] t) where
+--   type Item (Tensor '[r1, r0] t) = [t]
+--   fromList content = unsafePerformIO $ tensorFromHostBuffer defaultDevice (primArrayFromList (concat padded))
+--     where shape  = fromInteger <$> shapeVal (Proxy :: Proxy '[r1, r0])
+--           padded = take (head shape) (((\ c -> take (last shape) (c ++ repeat nullElement)) <$> content) ++ repeat (replicate (last shape) nullElement))
+--   toList = error "TODO: Implement"
+
+resizeList :: Int -> a -> [a] -> [a]
+resizeList len pad list
+  | len > 0   = 
+    case list of
+      []     -> replicate len pad
+      (a:as) -> a:resizeList (len - 1) pad as
+  | otherwise = []
+
+class T s t => ListToTensor s t where
+  type Padding s t
+  regularize :: Proxy s -> t -> [Padding s t] -> [Padding s t] 
+  padding    :: Proxy s -> t -> Padding s t
+  flatten    :: Proxy s -> [Padding s t] -> [t]
+
+instance T '[r0] t => ListToTensor '[r0] t where
+  type Padding '[r0] t = t
+  regularize _ = resizeList n 
+    where n = fromInteger $ shapeValHead (Proxy :: Proxy '[r0])
+  padding _ i = i
+  flatten _ = id
+
+instance (T (a ': as ': ass) t, ListToTensor (as ': ass) t) => ListToTensor (a ': as ': ass) t where
+  type Padding  (a ': as ': ass) t = [Padding (as ': ass) t]
+  regularize p t l = resizeList n (padding p t) l'
+    where n  = fromInteger $ shapeValHead (Proxy :: Proxy (a ': as ': ass))
+          l' = fmap (regularize (Proxy :: Proxy (as ': ass)) t) l
+  padding _ i = replicate n (padding (Proxy :: Proxy (as ': ass)) i)
+    where n = fromInteger $ shapeValHead (Proxy :: Proxy (as ': ass))
+  flatten _ = concatMap (flatten (Proxy :: Proxy (as ': ass)))
+
+instance ListToTensor s t => IsList (Tensor s t) where
+  type Item (Tensor s t) = Padding s t
+  fromList l = unsafePerformIO $ tensorFromHostBuffer defaultDevice l'
+    where p = Proxy :: Proxy s
+          l' = primArrayFromList $ flatten p $ regularize p (nullElement :: t) l
+  toList = error "TODO: Implement"
 
 type JitCacheTensor f = ([Buffer], LoadedExecutable, Annotated Int f)
 type JitTensor f = (Jit Tensor f, JitCacheTensor f ~ JitCache Tensor f)
@@ -125,13 +177,12 @@ instance (JitTensor a, JitTensor b) => Jit Tensor (a <+> b) where
   jitReify r0 = (a :+: b, r2)
     where (a, r1) = jitReify r0
           (b, r2) = jitReify r1
-  
 
 instance (T s t, JitTensor f) => Jit Tensor (Tracer s t -> f) where
   type JitResult Tensor (Tracer s t -> f) = Tensor s t -> JitResult Tensor f
   type JitCache  Tensor (Tracer s t -> f) = JitCacheTensor (Tracer s t -> f)
 
-  jit' (argumentStack, executable, Annotated coarity) t = jit' (argumentStack++[getUnderlyingBuffer t], executable, Annotated coarity)
+  jit' (argumentStack, executable, Annotated coarity) t = jit' (argumentStack++[getBuffer t], executable, Annotated coarity)
 
   jitInit f = ([], executable, Annotated coarity)
     where (coarity, executable) = unsafePerformIO $ compile f
@@ -176,7 +227,6 @@ instance (T s t, Floating t) => Floating (Tensor s t) where
   asinh = error "No equivalent stablehlo operation"
   acosh = error "No equivalent stablehlo operation"
   atanh = error "No equivalent stablehlo operation"
-  
 
 instance TensorOp Tensor where
   broadcast :: forall t (org :: Shape) (map :: Shape) (targ :: Shape). (Broadcast org map targ, Tensorial t) => Tensor org t -> Proxy map -> Tensor targ t
@@ -185,10 +235,9 @@ instance TensorOp Tensor where
           f = (`broadcast` p)
   broadcast' = jit broadcast'
 
-  prod :: forall l r p t. (TensorProductConstraint l r p, Tensorial t) => Tensor l t -> Tensor r t -> Tensor p t
   prod = jit prod
+  dot = jit dot
 
-
-instance (T s t, Fractional t) => Delta (Tensor s t) where
-  type Scalar (Tensor s t) = t
-  scalarDelta _ = 0.0001 -- TODO: Choose another constant, one that is less arbitrary
+-- instance (T s t, Fractional t) => Delta (Tensor s t) where
+--   type Scalar (Tensor s t) = t
+--   scalarDelta _ = 0.0001 -- TODO: Choose another constant, one that is less arbitrary

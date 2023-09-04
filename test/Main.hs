@@ -1,58 +1,71 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 module Main (main) where
 
 import HAX.Tensor 
 import HAX.PjRt
--- import HAX.Jit
--- 
--- import HAX.AD
--- import HAX.AD.Reverse
--- 
--- import Data.Proxy
--- 
--- type TestDim = '[2]
--- 
--- testing :: Num a => a -> a -> a
--- testing x y = x * y + x
+import Data.Data
 
-vmaptest :: Tracer '[5, 4] Float -> Tracer '[5, 6] Float -> Tracer '[4, 6] Float -> Tracer '[5, 4, 6] Float 
-vmaptest x y z = vmap (\ lhs rhs -> lhs |#| rhs + z') x y
-  where z' = signum z
+-- Sharing test
+test0 :: Tracer '[3, 5, 2] Float -> Tracer '[3, 5, 2] Float -> Tracer '[3, 5, 2] Float
+test0 x y = d
+  where a = x + y
+        b = a + a
+        c = b + b
+        d = c + c
 
+test1 :: Tracer '[5, 5] Float -> Tracer '[5, 5] Float -> Tracer '[5, 5] Float -> Tracer '[5, 5] Float
+test1 x y z = e
+  where a = x + y
+        b = z * x
+        c = a * z
+        d = b - y
+        e = c / d
+-- broadcast test
+test2 :: Tracer '[4] Float -> Tracer '[7, 4] Float -> Tracer '[7, 4] Float
+test2 x y = broadcast' x + y
+
+-- Vmap test
+test3 :: Tracer '[7, 5] Float -> Tracer '[7, 8] Float -> Tracer '[7, 5, 8] Float
+test3 x y = signum $ vmap (\ a b -> negate (prod a b)) x y
+
+test4 :: Tracer '[7, 3] Float -> Tracer '[7, 3] Float -> Tracer '[3] Float -> Tracer '[7, 3] Float
+test4 x y z = vmap (\ a b -> a * b + z) x y
+
+test5 i j k = vmap (\ a (b :: Tracer '[3] Float) -> vmap (\ c d -> c + d - k) a b) (i :: Tracer '[5, 3] Float) (j :: Tracer '[5, 3] Float)
+test8 (i :: Tracer '[] Float) = broadcast' k  :: Tracer '[7, 5] Float
+  where k = broadcast' i :: Tracer '[5] Float
+
+test6 :: Tracer '[] Float -> Tracer '[] Float
+test6 = id
+
+test7 :: Tracer '[] Float -> Tracer '[5, 5] Float
+test7 = broadcast'
+
+test9 :: Tracer '[2, 5] Float -> Tracer '[2, 5] Float -> Tracer '[5] Float -> Tracer '[5] Float -> Tracer '[2, 5] Float
+test9 a b c d = broadcast' (c + d) + vmap (+) a b
 
 main :: IO ()
 main = do 
---  let device = head $ clientAddressableDevices client
---  a :: Tensor TestDim Float <- withArray (replicate (12 * 12) 5)  $ tensorFromHostBuffer device
---  b :: Tensor TestDim Float <- withArray (replicate (12 * 12) 10)  $ tensorFromHostBuffer device
---  
---  let tested :: Jit' (Tracer TestDim Float -> Tracer TestDim Float -> Tracer TestDim Float)
---      tested = jit testing
---      grad   = rgrad (testing :: (a ~ Tracer TestDim Float) => Reverse a -> Reverse a -> Reverse a)
---      gradtest = jit grad
---      
---
---  traceDebug grad
---  
---  let c = tested a b
---      d = tested a c
---      e = tested c d
---      g :: Tensor '[2, 2, 2, 2] Float = broadcast c (Proxy :: Proxy '[1])
---      j :: Tensor '[2, 2, 2, 4, 2] Float = broadcast g (Proxy :: Proxy '[0, 1, 2, 4])
---
---  print $ gradtest a b
---  print $ gradtest a c
---  print $ gradtest e d
---  print g
---  print j
---  print $ a * b
---  traceDebug (\ (x :: Tracer '[2, 3] Float) (y :: Tracer '[4, 7] Float) -> x |#| y)
---  print $ a |#| b
+  let t0 :: Tensor '[2, 5, 3] Float 
+      t0 = [[[1, 4, 6], [2, 6, -1], [9, 4, 1], [5, -4, -5], [3, -2, -9]], [[1, 4, 6], [2, 6, -1], [9], [0, -4, -5], [3, -2 ]]]
+  
+  print t0 
+  
+  traceDebug test0
+  traceDebug test1
 
+  traceDebug test2
+  
+  traceDebug test3
+  traceDebug test4
+  traceDebug test5
+  traceDebug test8
 
-  traceDebug vmaptest 
-
+  traceDebug test6
+  traceDebug test7
+  traceDebug test9
 
   clientDestroy client
   return ()

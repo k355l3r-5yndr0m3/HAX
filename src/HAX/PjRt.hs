@@ -1,4 +1,5 @@
 {-# LANGUAGE UnliftedFFITypes #-}
+{-# LANGUAGE MagicHash #-}
 module HAX.PjRt where
 
 import HAX.PjRt.HostBufferSemantics (HostBufferSemantics)
@@ -12,11 +13,13 @@ import qualified HAX.PjRt.LoadedExecutable as C
 import qualified HAX.PjRt.Buffer           as C
 
 import GHC.IO.Unsafe (unsafePerformIO)
-import Foreign
 import MLIR.IR (ByteCode)
-import Data.Primitive.ByteArray (ByteArray)
-import Control.Monad (forM)
+
+import Data.Primitive
 import Data.Unique
+
+import Foreign
+import Control.Monad (forM)
 
 import Paths_HAX
 
@@ -70,9 +73,9 @@ clientAddressableDevices (Client c) = unsafePerformIO $ do
   devices <- C.clientAddressableDevices api c
   return $ Device <$> devices 
   
-clientBufferFromHostBuffer :: Client -> Ptr a -> BufferType -> ShapeInfo -> HostBufferSemantics -> Device -> IO (Event, Buffer)
-clientBufferFromHostBuffer (Client c) hostBuffer bufferType shapeInfo hostBufferSemantics (Device d) = do
-  (eventPtr, bufferPtr) <- C.clientBufferFromHostBuffer api c hostBuffer bufferType shapeInfo hostBufferSemantics d
+clientBufferFromHostBuffer :: Client -> ByteArray -> BufferType -> ShapeInfo -> HostBufferSemantics -> Device -> IO (Event, Buffer)
+clientBufferFromHostBuffer (Client c) (ByteArray hostBuffer#) bufferType shapeInfo hostBufferSemantics (Device d) = do
+  (eventPtr, bufferPtr) <- C.clientBufferFromHostBuffer api c hostBuffer# bufferType shapeInfo hostBufferSemantics d
   event <- newForeignPtrEnv C.eventDestroy__ptr api eventPtr
   buffer <- newForeignPtrEnv C.bufferDestroy__ptr api bufferPtr
   return (Event event, Buffer buffer)
@@ -82,7 +85,6 @@ bufferToHostBuffer :: Buffer -> IO ByteArray
 bufferToHostBuffer (Buffer b) = 
   withForeignPtr b $ \ b' -> 
     C.bufferToHostBuffer api b'
-
 
 -- Event
 eventAwait :: Event -> IO ()

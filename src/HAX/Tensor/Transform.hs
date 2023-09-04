@@ -42,7 +42,12 @@ instance ApplyTransform (RankedTensorType t e) where
 newtype BroadcastMap = BroadcastMap [Word64]
 instance AttrGet BroadcastMap where 
   attrGet (BroadcastMap mapping) = 
-    attrGet (DenseIntOrFPElements (VectorType [fromIntegral $ length mapping] I64) mapping)
+    if not (null mapping) then
+      attrGet (DenseIntOrFPElements (VectorType [fromIntegral $ length mapping] I64) mapping)
+    else 
+      attrGet (DenseIntOrFPElements (RankedTensorType [0] I64 NullAttr) mapping) -- For some reason, a vector [0] produce an error
+
+    
 instance DenseIntOrFPElementsAttr BroadcastMap
 instance DenseIntElementsAttr BroadcastMap
 
@@ -64,7 +69,6 @@ instance ApplyTransform DotDimensionNumbersAttr where
             d' = d { getBatchingDims = (0,0):fmap incr (getBatchingDims d),
                      getContractingDims = fmap incr (getContractingDims d)}
         in  applyTransform other d'
-
 
 
 class VMap f where 

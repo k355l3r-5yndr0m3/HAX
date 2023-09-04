@@ -2,6 +2,7 @@
 {-# LANGUAGE TypeFamilies #-}
 module HAX.AD.Reverse where
 import HAX.AD.Gradient
+import HAX.Tensor.Tensorial
 
 data Reverse t = Reverse { primal :: t, cotangent :: t -> Gradient }
 
@@ -49,3 +50,5 @@ instance Floating t => Floating (Reverse t) where
   sin (Reverse f f') = Reverse (sin f) (\ i -> f' (i * cos f))
   cos (Reverse f f') = Reverse (cos f) (\ i -> f' (negate (i * sin f)))
   tanh (Reverse f f') = Reverse (tanh f) (\ i -> f' (i * (1 - tanh f ** 2)))
+
+
