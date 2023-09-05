@@ -102,8 +102,8 @@ library
                       stablehlo-hs,
                       primitive,
                       containers,
+                      reflection
                       -- vector,
-                      -- reflection
 
 
     -- Directories containing source files.
@@ -177,4 +177,5 @@ test-suite HAX-test
     -- Test dependencies.
     build-depends:    base ^>=4.18.0.0,
                       HAX,
+                      reflection
 

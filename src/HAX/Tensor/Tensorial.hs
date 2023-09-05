@@ -6,7 +6,6 @@ module HAX.Tensor.Tensorial where
 import HAX.PjRt.BufferType
 
 import HAX.HList
-import Data.Proxy
 import GHC.TypeLits
 
 import Foreign
@@ -16,6 +15,8 @@ import MLIR
 import Data.IntMap.Strict (IntMap, empty)
 import Data.Primitive.ByteArray
 import Data.Kind 
+import Data.Proxy
+import Data.Reflection
 
 -- Shape
 type Shape = [Nat]
@@ -30,6 +31,9 @@ instance KnownShape '[] where
 instance (KnownNat a, KnownShape as) => KnownShape (a ': as) where
   shapeVal _ = natVal (Proxy :: Proxy a) : shapeVal (Proxy :: Proxy as)
   shapeRank _ = 1 + shapeRank (Proxy :: Proxy as)
+
+instance KnownShape s => Reifies s [Integer] where
+  reflect _ = shapeVal (Proxy :: Proxy s)
 
 type family ReverseListImpl (retro :: [a]) (pro :: [a]) :: [a] where
   ReverseListImpl r '[] = r

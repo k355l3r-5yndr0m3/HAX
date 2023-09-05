@@ -92,7 +92,6 @@ splat device a = withArray (replicate elemCount a) $ \ a' ->
   where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
   
 
-
 type JitCacheTensor f = ([Buffer], LoadedExecutable, Annotated Int f)
 type JitTensor f = (Jit Tensor f, JitCacheTensor f ~ JitCache Tensor f)
 instance Jit Tensor (Proxy (Tracer s t)) where
