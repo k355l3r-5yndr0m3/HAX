@@ -84,17 +84,36 @@ type family TensorProduct (lhs :: Shape) (rhs :: Shape) :: Shape where
   TensorProduct (a ': as) rhs = a ': TensorProduct as rhs
 type TensorProductConstraint l r p = (KnownShape l, KnownShape r, p ~ TensorProduct l r, KnownShape p)
 
+type family ReplaceAtIdx (l :: [a]) (i :: Nat) (r :: a) :: [a] where
+  ReplaceAtIdx '[]       _ _ = TypeError (Text "Index out of bound")
+  ReplaceAtIdx (a ': as) 0 r = r ': as
+  ReplaceAtIdx (a ': as) i r = a ': ReplaceAtIdx as (i - 1) r
 
+type family ToMaybeList (l :: [a]) :: [Maybe a] where
+  ToMaybeList '[]       = '[]
+  ToMaybeList (a ': as) = 'Just a ': ToMaybeList as
+type family FromMaybeList (l :: [Maybe a]) :: [a] where
+  FromMaybeList '[]              = '[]
+  FromMaybeList ('Just a ': as)  = a ': FromMaybeList as
+  FromMaybeList ('Nothing ': as) = FromMaybeList as
+type family ReduceImpl (l :: [Maybe a]) (r :: Shape) :: [Maybe a] where
+  ReduceImpl l '[]       = l
+  ReduceImpl l (a ': as) = ReduceImpl (ReplaceAtIdx l a 'Nothing) as
+type Reduce l r = FromMaybeList (ReduceImpl (ToMaybeList l) r)
 
 -- Tensor operation
 class TensorOp (a :: Shape -> Type -> Type) where
   -- Automatic broadcasting
   broadcast  :: (Broadcast org map targ, Tensorial t) => a org t -> Proxy map -> a targ t
-  broadcast' :: (Broadcast' org targ, Tensorial t) => a org t -> a targ t  
-  
+  broadcast' :: (Broadcast' org targ, Tensorial t) => a org t -> a targ t
+
+  reduceAdditive       :: (T s t, Num t, KnownShape r, KnownShape (Reduce s r)) => a s t -> Proxy r -> a (Reduce s r) t
+  reduceMultiplicative :: (T s t, Num t, KnownShape r, KnownShape (Reduce s r)) => a s t -> Proxy r -> a (Reduce s r) t
+
   -- TODO: Implement + - * / etc with automatic broadcasting
   prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
   dot  :: (T s t, Num t) => a s t -> a s t -> a '[] t
+
 
 
 (|#|) :: (TensorOp a, TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t

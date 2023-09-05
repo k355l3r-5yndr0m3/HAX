@@ -6,6 +6,9 @@ module Main (main) where
 import HAX.Tensor 
 import HAX.PjRt
 import Data.Data
+import HAX (compile)
+import HAX.AD.Reverse (Reverse)
+import HAX.AD (rgrad)
 
 -- Sharing test
 test0 :: Tracer '[3, 5, 2] Float -> Tracer '[3, 5, 2] Float -> Tracer '[3, 5, 2] Float
@@ -46,6 +49,16 @@ test7 = broadcast'
 test9 :: Tracer '[2, 5] Float -> Tracer '[2, 5] Float -> Tracer '[5] Float -> Tracer '[5] Float -> Tracer '[2, 5] Float
 test9 a b c d = broadcast' (c + d) + vmap (+) a b
 
+-- Reduction test
+test10 :: Tracer '[5, 2, 7, 2] Float -> Tracer '[5, 7] Float
+test10 x = reduceAdditive x (Proxy :: Proxy '[1, 3])
+
+-- Gradient 
+test11 :: Reverse Tracer '[5] Float -> Reverse Tracer '[5] Float -> Reverse Tracer '[5] Float
+test11 = (+)
+
+
+
 main :: IO ()
 main = do 
   let t0 :: Tensor '[2, 5, 3] Float 
@@ -67,5 +80,9 @@ main = do
   traceDebug test7
   traceDebug test9
 
+  traceDebug test10
+
+  traceDebug $ rgrad test11
+  
   clientDestroy client
   return ()

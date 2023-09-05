@@ -1,4 +1,5 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE ViewPatterns #-}
 module HAX.Tensor.Transform where
 import HAX.Tensor.Tensorial
 
@@ -68,6 +69,23 @@ instance ApplyTransform DotDimensionNumbersAttr where
         let incr (x, y) = (x + 1, y + 1)
             d' = d { getBatchingDims = (0,0):fmap incr (getBatchingDims d),
                      getContractingDims = fmap incr (getContractingDims d)}
+        in  applyTransform other d'
+
+newtype ReduceDimensions = ReduceDimensions [Word64]
+getReduceDimemsons :: KnownShape s => Proxy s -> ReduceDimensions
+getReduceDimemsons s = ReduceDimensions $ fromInteger <$> shapeVal s
+
+instance AttrGet ReduceDimensions where
+  attrGet (ReduceDimensions dims) = attrGet (DenseIntOrFPElements (RankedTensorType [fromIntegral $ length dims] I64 NullAttr) dims)
+instance DenseIntOrFPElementsAttr ReduceDimensions
+instance DenseIntElementsAttr ReduceDimensions
+
+instance ApplyTransform ReduceDimensions where
+  applyTransform tf d = 
+    case tf of 
+      Id        -> d
+      V _ other -> 
+        let ReduceDimensions (ReduceDimensions . fmap (1 +) -> d') = d
         in  applyTransform other d'
 
 

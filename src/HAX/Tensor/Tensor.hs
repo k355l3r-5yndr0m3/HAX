@@ -235,6 +235,9 @@ instance TensorOp Tensor where
           f = (`broadcast` p)
   broadcast' = jit broadcast'
 
+  reduceAdditive t r = jit (`reduceAdditive` r) t
+  reduceMultiplicative t r = jit (`reduceMultiplicative` r) t
+
   prod = jit prod
   dot = jit dot
 

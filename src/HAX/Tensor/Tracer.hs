@@ -156,6 +156,40 @@ instance TensorOp Tracer where
             targRank             = fromInteger $ shapeRank (Proxy :: Proxy targ)
             tag                  = getTag org
 
+  reduceAdditive :: forall s t r. (T s t, KnownShape r, Num t, KnownShape (Reduce s r)) => Tracer s t -> Proxy r -> Tracer (Reduce s r) t
+  reduceAdditive operand r = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
+    let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer (Reduce s r) t))
+        _re   = applyTransform tf $ getReduceDimemsons r
+    (t1, _operand) <- sharing operand t0 tf
+    (t2, _zero)    <- sharing zero t1 tf
+    (t2, ) . head <$> SHLO._ReduceOp _re [_operand, _zero] (do 
+      bb0 <- blockGet [scalarType, scalarType] 
+      blockDef bb0 $ do 
+        _0 <- blockArg 0 
+        _1 <- blockArg 1 
+        _3 <- SHLO._AddOp _0 _1 scalarType 
+        SHLO._ReturnOp [_3]) [_type]
+    where tag        = getTag operand
+          zero       = 0 :: Tracer '[] t
+          scalarType = tensorType' (Proxy :: Proxy (Tracer '[] t))
+
+  reduceMultiplicative :: forall s t r. (T s t, KnownShape r, Num t, KnownShape (Reduce s r)) => Tracer s t -> Proxy r -> Tracer (Reduce s r) t
+  reduceMultiplicative operand r = Tracer tag $ \ t0 (transformTruncate tag -> tf) -> do 
+    let _type = toAnyType $ applyTransform tf $ tensorType (Proxy :: Proxy (Tracer (Reduce s r) t))
+        _re   = applyTransform tf $ getReduceDimemsons r
+    (t1, _operand) <- sharing operand t0 tf
+    (t2, _one)     <- sharing one t1 tf
+    (t2, ) . head <$> SHLO._ReduceOp _re [_operand, _one] (do 
+      bb0 <- blockGet [scalarType, scalarType] 
+      blockDef bb0 $ do 
+        _0 <- blockArg 0 
+        _1 <- blockArg 1 
+        _3 <- SHLO._MulOp _0 _1 scalarType 
+        SHLO._ReturnOp [_3]) [_type]
+    where tag        = getTag operand
+          one        = 1 :: Tracer '[] t
+          scalarType = tensorType' (Proxy :: Proxy (Tracer '[] t))
+
   prod :: forall l r p t. (TensorProductConstraint l r p, Tensorial t) => Tracer l t -> Tracer r t -> Tracer p t
   prod lhs rhs = Tracer tag   $ \ t0 (transformTruncate tag   -> tf) -> do 
     let _type = toAnyType         $ applyTransform tf       $ tensorType (Proxy :: Proxy (Tracer p t))
