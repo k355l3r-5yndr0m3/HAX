@@ -6,7 +6,6 @@
 module HAX.Tensor.Tracer where
 import Prelude hiding (lookup)
 
-import HAX.Math 
 import HAX.Tensor.Tensorial
 
 import HAX.HList
@@ -27,8 +26,31 @@ import qualified MLIR.Dialect.Func as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
 
+-- The problem of transformation, how can this be accompished
+-- firstly, gradient
+--   what is the gradient of vmap
+--     firstly, vmap does not really exist, it just transform the code
+--   or just skipping vmap because it is so difficult to implement
 newtype Tracer (s :: Shape) t = Tracer (IntMap Value -> BlockM (IntMap Value, Value))
+newtype TracerM a = TracerM (IntMap Value -> BlockM (IntMap Value, a))
+instance Functor TracerM where
+  fmap f (TracerM a) = TracerM $ \ t0 -> do 
+    (t1, a') <- a t0 
+    return (t1, f a')
+instance Applicative TracerM where
+  pure a = TracerM $ \ t0 -> return (t0, a)
+  TracerM f <*> TracerM a = TracerM $ \ t0 -> do 
+    (t1, f') <- f t0 
+    (t2, a') <- a t1 
+    return (t2, f' a')
+instance Monad TracerM where
+  TracerM a >>= f = TracerM $ \ t0 -> do 
+    (t1, a') <- a t0 
+    let TracerM b = f a'
+    b t1 
 
+mkTracer :: TracerM Value -> Tracer s t
+mkTracer (TracerM f) = Tracer f
 
 sharing :: forall s t. Tracer s t -> IntMap Value -> BlockM (IntMap Value, Value)
 sharing tracer table = do 
@@ -204,6 +226,9 @@ instance TensorOp Tracer where
           mapping' :: [Word64] = fromIntegral <$> take (fromInteger orgRank) [targRank - orgRank..]
           mapping              = DenseIntOrFPElements (VectorType [fromIntegral orgRank] I64) mapping'
 
+  reduceAdd :: (T s t, Num t, KnownShape r, KnownShape (Reduce s r)) => Tracer s t -> Proxy r -> Tracer (Reduce s r) t
+  reduceAdd operand r = Tracer $ \ t0 -> do 
+    undefined
 
 
   prod :: forall l r p t. (TensorProductConstraint l r p, Tensorial t) => Tracer l t -> Tracer r t -> Tracer p t

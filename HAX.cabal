@@ -75,7 +75,6 @@ library
                       HAX.AD.Gradient
                       HAX.Jit
                       HAX.HList
-                      HAX.Math
     -- TODO: Move some of these modules to other
 
     -- Modules included in this library but not exported.

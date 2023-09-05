@@ -16,7 +16,7 @@ import Data.IntMap.Strict (IntMap, empty)
 import Data.Primitive.ByteArray
 import Data.Kind 
 import Data.Proxy
-import Data.Reflection
+-- import Data.Reflection
 
 -- Shape
 type Shape = [Nat]
@@ -32,8 +32,8 @@ instance (KnownNat a, KnownShape as) => KnownShape (a ': as) where
   shapeVal _ = natVal (Proxy :: Proxy a) : shapeVal (Proxy :: Proxy as)
   shapeRank _ = 1 + shapeRank (Proxy :: Proxy as)
 
-instance KnownShape s => Reifies s [Integer] where
-  reflect _ = shapeVal (Proxy :: Proxy s)
+-- instance KnownShape s => Reifies s [Integer] where
+--   reflect _ = shapeVal (Proxy :: Proxy s)
 
 type family ReverseListImpl (retro :: [a]) (pro :: [a]) :: [a] where
   ReverseListImpl r '[] = r
@@ -79,6 +79,22 @@ type family TensorProduct (lhs :: Shape) (rhs :: Shape) :: Shape where
   TensorProduct (a ': as) rhs = a ': TensorProduct as rhs
 type TensorProductConstraint l r p = (KnownShape l, KnownShape r, p ~ TensorProduct l r, KnownShape p)
 
+type family ReplaceAtIdx (l :: [a]) (i :: Nat) (r :: a) :: [a] where
+  ReplaceAtIdx '[]       _ _ = TypeError (Text "Index out of bound")
+  ReplaceAtIdx (a ': as) 0 r = r ': as
+  ReplaceAtIdx (a ': as) i r = a ': ReplaceAtIdx as (i - 1) r
+
+type family ToMaybeList (l :: [a]) :: [Maybe a] where
+  ToMaybeList '[]       = '[]
+  ToMaybeList (a ': as) = 'Just a ': ToMaybeList as
+type family FromMaybeList (l :: [Maybe a]) :: [a] where
+  FromMaybeList '[]              = '[]
+  FromMaybeList ('Just a ': as)  = a ': FromMaybeList as
+  FromMaybeList ('Nothing ': as) = FromMaybeList as
+type family ReduceImpl (l :: [Maybe a]) (r :: Shape) :: [Maybe a] where
+  ReduceImpl l '[]       = l
+  ReduceImpl l (a ': as) = ReduceImpl (ReplaceAtIdx l a 'Nothing) as
+type Reduce l r = FromMaybeList (ReduceImpl (ToMaybeList l) r)
 
 
 
@@ -151,3 +167,20 @@ tensorType' :: T s t => Proxy (a s t) -> AnyType
 tensorType' = toAnyType . tensorType
 
 
+
+class TensorOp (a :: Shape -> Type -> Type) where
+  -- Automatic broadcasting
+  broadcast  :: (Broadcast org map targ, Tensorial t) => a org t -> Proxy map -> a targ t
+  broadcast' :: (Broadcast' org targ, Tensorial t) => a org t -> a targ t  
+
+  reduceAdd :: (T s t, Num t, KnownShape r, KnownShape (Reduce s r)) => a s t -> Proxy r -> a (Reduce s r) t
+  reduceMul :: (T s t, Num t, KnownShape r, KnownShape (Reduce s r)) => a s t -> Proxy r -> a (Reduce s r) t
+  
+  -- TODO: Implement + - * / etc with automatic broadcasting
+  prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
+
+  
+
+(|#|) :: (TensorOp a, TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
+(|#|) = prod
+infixl 8 |#|
