@@ -1,10 +1,12 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE ViewPatterns #-}
 module HAX.Tensor.Target where
+import HAX.Jit
+
 import HAX.Tensor.Tensorial
 import HAX.Tensor.Tracer
+import HAX.Tensor.Tensor
 
 import Control.Exception
 
@@ -47,6 +49,10 @@ import GHC.TypeLits
 --        dim_i isSuffixOf dim_max
 --        dim_min isSuffixOf dim_i
 -- To ensure correctness, it is enough to broadcast all t_es so that they have the same dims as dim_max. The proof is obvious (I think)
+--
+-- The `capture` function allow this broadcasting to be done inside function, and the `binary` function allow this to be done automatically whenever two 
+--  targets is fed into a binary function, they are automatically broadcasted
+-- But this is not done at the site of vmap, which assumes all the inputs feeding it have the same dims and the output has the expected dim, this can easily be solved.
 
 data Target (s :: Shape) t = Target [Integer] (Tracer s t)
 
@@ -130,15 +136,6 @@ instance (T s t, Fractional t) => Fractional (Target s t) where
   
   fromRational r = Target [] (fromRational r)
 
-instance T s t => Traceable (Target s t) where
-  trace' i (Target d u) = reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
-          result _ = trace' i $! (coerce u :: Tracer s' t)
-
-instance (T s t, Traceable f) => Traceable (Target s t -> f) where
-  trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
-    where argn = Target [] $ Tracer (\ a -> (a, ) <$> blockArg i)
-          _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 instance TensorOp Target where
   unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Target s0 t -> [Integer] -> Target s1 t
@@ -192,26 +189,41 @@ instance TensorOp Target where
             in  coerce $! t2
 
   splat = Target [] . splat
-    
 
 class Vectorizable f where
   type Vectorized (i :: Nat) f = r | r -> i f
-  vmap' :: KnownNat i => f -> Vectorized i f
+  vmap' :: KnownNat i => [Integer] -> ([Integer] -> f) -> Vectorized i f
 
-instance Vectorizable (Target s t) where
+instance T s t => Vectorizable (Target s t) where
   type Vectorized i (Target s t) = Target (i ': s) t
 
   -- TODO: Handle to constant case
-  vmap' :: forall i. KnownNat i => Target s t -> Vectorized i (Target s t)
-  vmap' (Target dim i) = assert (d == natVal (Proxy :: Proxy i)) (Target ds $ coerce i)
-    where (ds, d) = (init dim, last dim)
+  vmap' :: forall i. KnownNat i => [Integer] -> ([Integer] -> Target s t) -> Vectorized i (Target s t)
+  vmap' dimmax f = Target dimmax $ coerce t
+    where i = natVal (Proxy :: Proxy i)
+          Target _ t = capture (f dimmax) (dimmax ++ [i])
 
-instance Vectorizable f => Vectorizable (Target s t -> f) where
+instance (T s t, Vectorizable f) => Vectorizable (Target s t -> f) where
   type Vectorized i (Target s t -> f) = Target (i ': s) t -> Vectorized i f
 
-  vmap' :: forall i. KnownNat i => (Target s t -> f) -> Vectorized i (Target s t -> f)
-  vmap' f (Target ds i) = vmap' (f (Target (ds ++ [d]) (coerce i)))
-    where d = natVal (Proxy :: Proxy i)
+  vmap' :: forall i. KnownNat i => [Integer] -> ([Integer] -> Target s t -> f) -> Vectorized i (Target s t -> f)
+  vmap' dimmax f arg@(Target ds _) = vmap' dimmax' f'
+    where i = natVal (Proxy :: Proxy i)
+          f' dim = 
+            let Target _ u = capture arg dim
+            in  f dim $ Target (dim ++ [i]) (coerce u)
+          dimmax' = if length dimmax < length ds then ds else dimmax
 
-vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b)
-vmap = vmap'
+vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b) 
+vmap f = vmap' [] (const f)
+
+
+instance T s t => Traceable (Target s t) where
+  trace' i (Target d u) = reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
+    where result :: forall s'. KnownShape s' => Proxy s' -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
+          result _ = trace' i $! (coerce u :: Tracer s' t)
+
+instance (T s t, Traceable f) => Traceable (Target s t -> f) where
+  trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
+    where argn = Target [] $ Tracer (\ a -> (a, ) <$> blockArg i)
+          _type = tensorType' (Proxy :: Proxy (Tracer s t))

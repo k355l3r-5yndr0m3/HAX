@@ -7,7 +7,7 @@
 module HAX.Tensor.Tensorial where
 import HAX.PjRt.BufferType
 
-import HAX.HList
+import HAX.Utils
 
 import Data.IntMap.Strict (IntMap, empty)
 import Data.Primitive.ByteArray

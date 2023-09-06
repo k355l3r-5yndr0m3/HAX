@@ -49,6 +49,14 @@ test10 = vmap (`broadcast` (Proxy :: Proxy '[1]))
 test11 :: Target '[2, 5, 3] Float -> Target '[3, 7] Float -> Target '[2, 5, 7] Float 
 test11 x y = vmap (`matmul` y) x
 
+test12 :: Target [5, 2] Float -> Target [5, 2] Float -> Target '[2] Float -> Target [5, 2] Float
+test12 x y z = 
+  vmap (\ a b -> 
+    a + vmap (+) b z) x y
+
+test13 :: Target [5, 2] Float -> Target '[2] Float -> Target [5, 2] Float
+test13 x y = vmap (const y) x
+
 main :: IO ()
 main = do 
   traceDebug test1
@@ -63,6 +71,9 @@ main = do
   traceDebug test9
   traceDebug test10
   traceDebug test11
+
+  traceDebug test12
+  traceDebug test13
 
   clientDestroy client
   return ()

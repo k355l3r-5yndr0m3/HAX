@@ -7,7 +7,7 @@ import Prelude hiding (lookup)
 
 import HAX.Tensor.Tensorial
 
-import HAX.HList
+import HAX.Utils
 import HAX.Jit
 
 import Control.Exception
@@ -25,13 +25,7 @@ import MLIR
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
 
--- The problem of transformation, how can this be accompished
--- firstly, gradient
---   what is the gradient of vmap
---     firstly, vmap does not really exist, it just transform the code
---   or just skipping vmap because it is so difficult to implement
 newtype Tracer (s :: Shape) t = Tracer (IntMap Value -> BlockM (IntMap Value, Value))
-
 
 newtype TracerM a = TracerM (IntMap Value -> BlockM (IntMap Value, a))
 instance Functor TracerM where
@@ -55,9 +49,6 @@ mkTracer (TracerM f) = Tracer f
 
 sharing' :: forall s t. Tracer s t -> IntMap Value -> BlockM (IntMap Value, Value)
 sharing' tracer table = do 
-  -- NOTE: the $! should not be needed because it is a newtype (I guess because it is already strict???)
-  --       I don't know how haskell work 
-  --       Leave it here anyway
   hash <- blockRunIO (hashStableName <$> (makeStableName $! tracer))
   case lookup hash table of
     Just item -> return (table, item)

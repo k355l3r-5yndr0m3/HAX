@@ -6,7 +6,6 @@ module HAX.AD where
 import HAX.AD.Gradient
 import HAX.AD.Reverse
 
-import HAX.HList
 import HAX.Utils
 
 import Foreign.C

@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 module HAX.Jit where
 
 import HAX.Tensor.Tensorial
@@ -13,8 +14,6 @@ import MLIR
 
 import qualified MLIR.Dialect.Func           as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
-
-
 
 compile :: Traceable (a -> b) => (a -> b) -> IO (Int, LoadedExecutable)
 compile f = (length outs, ) <$> (
@@ -44,3 +43,6 @@ class Traceable f => Jit (t :: Shape -> Type -> Type) (f :: Type) where
   jitInit :: f -> JitCache t f
 
   jitReify :: [Buffer] -> (JitResult t f, [Buffer])
+
+jit :: f ~ (a -> b) => f -> Jit' f
+jit f = jit' (jitInit f)

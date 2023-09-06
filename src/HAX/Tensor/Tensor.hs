@@ -12,8 +12,6 @@ import HAX.Jit
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.HostBufferSemantics
--- TODO: Might merge HList and Utils
-import HAX.HList
 import HAX.Utils
 
 import Control.Exception
@@ -139,11 +137,7 @@ instance (T s t, JitTensor f) => Jit Tensor (Tracer s t -> f) where
 
   jitReify = error "Should not be possible"
 
-
-jit :: forall f a b. (f ~ (a -> b), JitTracer f, JitTensor f) => f -> Jit' f
-jit f = jit' (jitInit f)
-
-instance (KnownShape s, Tensorial t, Num t) => Num (Tensor s t) where
+instance (T s t, Num t) => Num (Tensor s t) where
   (+) = jit (+)
   (-) = jit (-)
   (*) = jit (*)
@@ -161,11 +155,9 @@ instance (KnownShape s, Tensorial t, Fractional t) => Fractional (Tensor s t) wh
   fromRational = error "This is problematic"
 
 instance TensorOp Tensor where
---  broadcast :: forall t (org :: Shape) (map :: Shape) (targ :: Shape). (Broadcast org map targ, Tensorial t) => Tensor org t -> Proxy map -> Tensor targ t
---  broadcast i p = jit f i
---    where f :: Tracer org t -> Tracer targ t 
---          f = (`broadcast` p)
---  broadcast' = jit broadcast'
---
---  prod :: forall l r p t. (TensorProductConstraint l r p, Tensorial t) => Tensor l t -> Tensor r t -> Tensor p t
---  prod = jit prod
+  unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand
+  unsafeReduce operand body initvalue redims = jit (\ _operand -> unsafeReduce _operand body initvalue redims) operand
+  unsafeDotGeneral lhs rhs attr = jit (\ _lhs _rhs -> unsafeDotGeneral _lhs _rhs attr) lhs rhs
+
+  splat a = unsafePerformIO $ tensorSplat defaultDevice a
+
