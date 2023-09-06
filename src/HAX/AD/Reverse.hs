@@ -2,12 +2,13 @@
 {-# LANGUAGE TypeFamilies #-}
 module HAX.AD.Reverse where
 import HAX.AD.Gradient
+import HAX.Tensor.Tensorial
 
-data Reverse t = Reverse { primal :: t, cotangent :: t -> Gradient }
+data Reverse r s t = Reverse { primal :: r s t, cotangent :: r s t -> Gradient }
 
 -- TODO: Restrict this to only continuous types (Float, Double, etc)
 --       Discrete types don't have derivatives
-instance Num t => Num (Reverse t) where
+instance Num (r s t) => Num (Reverse r s t) where
   (Reverse f f') + (Reverse g g') = 
     Reverse (f + g) (\ i -> f' i <+> g' i)
 
@@ -29,7 +30,7 @@ instance Num t => Num (Reverse t) where
   fromInteger a = 
     Reverse (fromInteger a) (const zero)
 
-instance Fractional t => Fractional (Reverse t) where
+instance Fractional (r s t) => Fractional (Reverse r s t) where
   recip (Reverse f f') = 
     Reverse (recip f) (\ i -> f' (negate i / (f * f)))
 
@@ -38,3 +39,6 @@ instance Fractional t => Fractional (Reverse t) where
 
   fromRational r = 
     Reverse (fromRational r) (const zero)
+
+instance TensorOp r => TensorOp (Reverse r) where
+  

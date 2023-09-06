@@ -8,7 +8,6 @@ import Prelude hiding (lookup)
 import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
 
-import HAX.Math 
 import HAX.Jit
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
@@ -17,15 +16,17 @@ import HAX.PjRt.HostBufferSemantics
 import HAX.HList
 import HAX.Utils
 
+import Control.Exception
+
 import Data.Proxy
 import Data.Kind
 import Data.Primitive
 
 import Foreign hiding (sizeOf)
 import GHC.IO.Unsafe (unsafePerformIO)
+
 import MLIR
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
-import Control.Exception (assert)
 
 newtype Tensor (s :: Shape) a = Tensor { getUnderlyingBuffer :: Buffer }
 class Trace (t :: Shape -> Type -> Type) where
@@ -75,19 +76,18 @@ tensorFromHostBuffer device buffer = Tensor <$> do
   where p = Proxy :: Proxy a
         shape = fromIntegral <$> shapeVal (Proxy :: Proxy s)
 
-unity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
-unity device = withArray bufferData $ \ buffer -> 
+tensorUnity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
+tensorUnity device = withArray bufferData $ \ buffer -> 
   tensorFromHostBuffer device buffer
   where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) unitElement
-
         
-nullity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
-nullity device = withArray bufferData $ \ buffer -> 
+tensorNullity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
+tensorNullity device = withArray bufferData $ \ buffer -> 
   tensorFromHostBuffer device buffer 
   where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) nullElement
 
-splat :: forall s a. (KnownShape s, Tensorial a) => Device -> a -> IO (Tensor s a)
-splat device a = withArray (replicate elemCount a) $ \ a' -> 
+tensorSplat :: forall s a. (KnownShape s, Tensorial a) => Device -> a -> IO (Tensor s a)
+tensorSplat device a = withArray (replicate elemCount a) $ \ a' -> 
   tensorFromHostBuffer device a'
   where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
   
@@ -161,11 +161,11 @@ instance (KnownShape s, Tensorial t, Fractional t) => Fractional (Tensor s t) wh
   fromRational = error "This is problematic"
 
 instance TensorOp Tensor where
-  broadcast :: forall t (org :: Shape) (map :: Shape) (targ :: Shape). (Broadcast org map targ, Tensorial t) => Tensor org t -> Proxy map -> Tensor targ t
-  broadcast i p = jit f i
-    where f :: Tracer org t -> Tracer targ t 
-          f = (`broadcast` p)
-  broadcast' = jit broadcast'
-
-  prod :: forall l r p t. (TensorProductConstraint l r p, Tensorial t) => Tensor l t -> Tensor r t -> Tensor p t
-  prod = jit prod
+--  broadcast :: forall t (org :: Shape) (map :: Shape) (targ :: Shape). (Broadcast org map targ, Tensorial t) => Tensor org t -> Proxy map -> Tensor targ t
+--  broadcast i p = jit f i
+--    where f :: Tracer org t -> Tracer targ t 
+--          f = (`broadcast` p)
+--  broadcast' = jit broadcast'
+--
+--  prod :: forall l r p t. (TensorProductConstraint l r p, Tensorial t) => Tensor l t -> Tensor r t -> Tensor p t
+--  prod = jit prod

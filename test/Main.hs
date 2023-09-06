@@ -3,37 +3,66 @@
 module Main (main) where
 
 import HAX.Tensor
-import Data.Reflection
+import HAX.PjRt 
+
+import Data.Proxy
+
+test1 :: Target '[5] Float -> Target '[5] Float -> Target '[5] Float 
+test1 = (+)
+test2 :: Target '[5] Float -> Target '[5] Float -> Target '[5] Float 
+test2 = (-)
+test3 :: Target '[5] Float -> Target '[5] Float -> Target '[5] Float 
+test3 = (*)
+test4 :: Target '[6, 1] Float 
+test4 = 0
+
+-- test5 :: Target '[5] Float -> Target '[7] Float -> Target '[5, 7] Float
+-- test5 = prod
+-- 
+-- test6 :: Target '[8, 4, 7] Float -> Target '[4] Float
+-- test6 x = reduceAdd x (Proxy :: Proxy '[0, 2])
+
+test5 :: Target '[5, 3] Float -> Target '[5, 3] Float -> Target '[5, 3] Float
+test5 = vmap (\ a b -> 
+  let c = a + b
+      d = c + a
+      e = d + c
+      f = d + d
+      g = f + e
+  in  g)
+
+test6 :: Target '[2, 3, 4] Float -> Target '[2, 3, 4] Float -> Target '[2, 3, 4] Float
+test6 = vmap (\ a b -> a - vmap (+) a b)
+
+test7 :: Target '[2, 3] Float -> Target '[3] Float -> Target '[2, 3] Float
+test7 x y = vmap (+ y) x
+
+test8 :: Target '[4, 5] Float -> Target '[7, 4, 3, 5] Float 
+test8 = (`broadcast` (Proxy :: Proxy '[1, 3]))
+
+test9 :: Target '[5] Float -> Target '[4, 2, 5] Float
+test9 = broadcast'
+
+test10 :: Target '[5, 2] Float -> Target '[5, 4, 2, 7] Float
+test10 = vmap (`broadcast` (Proxy :: Proxy '[1]))
+
+test11 :: Target '[2, 5, 3] Float -> Target '[3, 7] Float -> Target '[2, 5, 7] Float 
+test11 x y = vmap (`matmul` y) x
 
 main :: IO ()
 main = do 
-  reify [12, 4] (print . reflect)
-  -- let device = head $ clientAddressableDevices client
-  -- a :: Tensor TestDim Float <- withArray (replicate (12 * 12) 5)  $ tensorFromHostBuffer device
-  -- b :: Tensor TestDim Float <- withArray (replicate (12 * 12) 10)  $ tensorFromHostBuffer device
-  -- 
-  -- let tested :: Jit' (Tracer TestDim Float -> Tracer TestDim Float -> Tracer TestDim Float)
-  --     tested = jit testing
-  --     grad   = rgrad (testing :: (a ~ Tracer TestDim Float) => Reverse a -> Reverse a -> Reverse a)
-  --     gradtest = jit grad
-  --     
-  -- 
-  -- traceDebug grad
-  -- 
-  -- let c = tested a b
-  --     d = tested a c
-  --     e = tested c d
-  --     g :: Tensor '[2, 2, 2, 2] Float = broadcast c (Proxy :: Proxy '[1])
-  --     j :: Tensor '[2, 2, 2, 4, 2] Float = broadcast g (Proxy :: Proxy '[0, 1, 2, 4])
-  -- 
-  -- print $ gradtest a b
-  -- print $ gradtest a c
-  -- print $ gradtest e d
-  -- print g
-  -- print j
-  -- print $ a * b
-  -- traceDebug (\ (x :: Tracer '[2, 3] Float) (y :: Tracer '[4, 7] Float) -> x |#| y)
-  -- print $ a |#| b
-  -- 
-  -- clientDestroy client
+  traceDebug test1
+  traceDebug test2
+  traceDebug test3
+  -- traceDebug test5
+  -- traceDebug test6
+  traceDebug test5
+  traceDebug test6
+  traceDebug test7
+  traceDebug test8
+  traceDebug test9
+  traceDebug test10
+  traceDebug test11
+
+  clientDestroy client
   return ()
