@@ -14,9 +14,9 @@ import qualified HAX.PjRt.Buffer           as C
 import GHC.IO.Unsafe (unsafePerformIO)
 import Foreign
 import MLIR.IR (ByteCode)
-import Data.Primitive.ByteArray (ByteArray)
 import Control.Monad (forM)
 import Data.Unique
+import Data.Primitive
 
 import Paths_HAX
 
@@ -70,7 +70,7 @@ clientAddressableDevices (Client c) = unsafePerformIO $ do
   devices <- C.clientAddressableDevices api c
   return $ Device <$> devices 
   
-clientBufferFromHostBuffer :: Client -> Ptr a -> BufferType -> ShapeInfo -> HostBufferSemantics -> Device -> IO (Event, Buffer)
+clientBufferFromHostBuffer :: Client -> ByteArray -> BufferType -> ShapeInfo -> HostBufferSemantics -> Device -> IO (Event, Buffer)
 clientBufferFromHostBuffer (Client c) hostBuffer bufferType shapeInfo hostBufferSemantics (Device d) = do
   (eventPtr, bufferPtr) <- C.clientBufferFromHostBuffer api c hostBuffer bufferType shapeInfo hostBufferSemantics d
   event <- newForeignPtrEnv C.eventDestroy__ptr api eventPtr

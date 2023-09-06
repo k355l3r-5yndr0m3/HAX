@@ -1,11 +1,13 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE OverloadedLists #-}
 module Main (main) where
 
 import HAX.Tensor
 import HAX.PjRt 
 
 import Data.Proxy
+import GHC.IsList
 
 test1 :: Target '[5] Float -> Target '[5] Float -> Target '[5] Float 
 test1 = (+)
@@ -74,6 +76,9 @@ main = do
 
   traceDebug test12
   traceDebug test13
+
+  let tensor :: Tensor '[5, 5] Float = fromList [[i..i+4] | i <- [0..4]]
+  print tensor
 
   clientDestroy client
   return ()

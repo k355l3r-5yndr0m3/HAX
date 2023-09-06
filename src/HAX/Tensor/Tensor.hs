@@ -2,6 +2,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE MagicHash #-}
 module HAX.Tensor.Tensor where
 import Prelude hiding (lookup)
 
@@ -20,8 +21,8 @@ import Data.Proxy
 import Data.Kind
 import Data.Primitive
 
-import Foreign hiding (sizeOf)
 import GHC.IO.Unsafe (unsafePerformIO)
+import GHC.IsList
 
 import MLIR
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
@@ -64,29 +65,61 @@ instance (T s a, Show a, Prim a) => Show (Tensor s a) where
               in  formater offs' ((idx - 1, ext):ies) buf s'
 
 
+resizeList :: Int -> a -> [a] -> [a]
+resizeList len pad list
+  | len > 0   = 
+    case list of
+      []     -> replicate len pad
+      (a:as) -> a:resizeList (len - 1) pad as
+  | otherwise = []
 
+class T s t => ListToTensor s t where
+  type Padding s t
+  regularize :: Proxy s -> t -> [Padding s t] -> [Padding s t] 
+  padding    :: Proxy s -> t -> Padding s t
+  flatten    :: Proxy s -> [Padding s t] -> [t]
 
-tensorFromHostBuffer :: forall s a. (KnownShape s, Tensorial a) => Device -> Ptr a -> IO (Tensor s a)
-tensorFromHostBuffer device buffer = Tensor <$> do 
-  (e, b) <- clientBufferFromHostBuffer client buffer (pjrtBufferType p) (Shape shape) kImmutableOnlyDuringCall device
+instance T '[r0] t => ListToTensor '[r0] t where
+  type Padding '[r0] t = t
+  regularize _ = resizeList n 
+    where n = fromInteger $ shapeValHead (Proxy :: Proxy '[r0])
+  padding _ i = i
+  flatten _ = id
+
+instance (T (a ': as ': ass) t, ListToTensor (as ': ass) t) => ListToTensor (a ': as ': ass) t where
+  type Padding  (a ': as ': ass) t = [Padding (as ': ass) t]
+  regularize p t l = resizeList n (padding p t) l'
+    where n  = fromInteger $ shapeValHead (Proxy :: Proxy (a ': as ': ass))
+          l' = fmap (regularize (Proxy :: Proxy (as ': ass)) t) l
+  padding _ i = replicate n (padding (Proxy :: Proxy (as ': ass)) i)
+    where n = fromInteger $ shapeValHead (Proxy :: Proxy (as ': ass))
+  flatten _ = concatMap (flatten (Proxy :: Proxy (as ': ass)))
+
+instance ListToTensor s t => IsList (Tensor s t) where
+  type Item (Tensor s t) = Padding s t
+  fromList l = unsafePerformIO $ tensorFromHostBuffer defaultDevice l'
+    where p = Proxy :: Proxy s
+          l' = primArrayFromList $ flatten p $ regularize p (nullElement :: t) l
+  toList = error "TODO: Implement"
+
+tensorFromHostBuffer :: forall s a. (KnownShape s, Tensorial a) => Device -> PrimArray a -> IO (Tensor s a)
+tensorFromHostBuffer device (PrimArray buffer#) = Tensor <$> do 
+  (e, b) <- clientBufferFromHostBuffer client (ByteArray buffer#) (pjrtBufferType p) (Shape shape) kImmutableOnlyDuringCall device
   eventAwait e
   return b
   where p = Proxy :: Proxy a
         shape = fromIntegral <$> shapeVal (Proxy :: Proxy s)
 
-tensorUnity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
-tensorUnity device = withArray bufferData $ \ buffer -> 
-  tensorFromHostBuffer device buffer
+tensorUnity :: forall s t. T s t => Device -> IO (Tensor s t)
+tensorUnity device = tensorFromHostBuffer device (primArrayFromList bufferData)
   where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) unitElement
         
-tensorNullity :: forall s a. (KnownShape s, Tensorial a) => Device -> IO (Tensor s a)
-tensorNullity device = withArray bufferData $ \ buffer -> 
-  tensorFromHostBuffer device buffer 
+tensorNullity :: forall s t. T s t => Device -> IO (Tensor s t)
+tensorNullity device = tensorFromHostBuffer device (primArrayFromList bufferData)
   where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) nullElement
 
-tensorSplat :: forall s a. (KnownShape s, Tensorial a) => Device -> a -> IO (Tensor s a)
-tensorSplat device a = withArray (replicate elemCount a) $ \ a' -> 
-  tensorFromHostBuffer device a'
+tensorSplat :: forall s t. T s t => Device -> t -> IO (Tensor s t)
+tensorSplat device a = tensorFromHostBuffer device (primArrayFromList $ replicate elemCount a)
   where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
   
 

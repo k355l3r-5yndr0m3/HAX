@@ -14,9 +14,10 @@ import Data.Primitive.ByteArray
 import Data.Kind 
 import Data.Proxy
 import Data.Reflection
+import Data.Primitive
+import Data.Int
 
-import Foreign
-import Foreign.C
+import Foreign.C (CIntPtr)
 
 import GHC.TypeLits
 
@@ -31,17 +32,18 @@ type Shape = [Nat]
 class KnownShape (s :: Shape) where
   shapeVal :: Proxy s -> [Integer]
   shapeRank :: Proxy s -> Integer
+  shapeValHead :: Proxy s -> Integer
   
 instance KnownShape '[] where
   shapeVal _ = []
   shapeRank _ = 0
+  shapeValHead _ = undefined
 
 instance (KnownNat a, KnownShape as) => KnownShape (a ': as) where
   shapeVal _ = natVal (Proxy :: Proxy a) : shapeVal (Proxy :: Proxy as)
   shapeRank _ = 1 + shapeRank (Proxy :: Proxy as)
+  shapeValHead _ = natVal (Proxy :: Proxy a)
 
--- instance KnownShape s => Reifies s [Integer] where
---   reflect _ = shapeVal (Proxy :: Proxy s)
 reifyShape :: forall r. [Integer] -> (forall (s :: Shape). KnownShape s => Proxy s -> r) -> r
 reifyShape []     f = f (Proxy :: Proxy '[])
 reifyShape (a:as) f = reifyNat a (\ p -> reifyShape as (f . k p))
@@ -110,7 +112,7 @@ type family ReduceImpl (l :: [Maybe a]) (r :: Shape) :: [Maybe a] where
 type Reduce l r = FromMaybeList (ReduceImpl (ToMaybeList l) r)
 
 -- Tensorial
-class (Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
+class (Prim a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
   type SHLOType a
   type DenseSplatAttr a
   type DenseElemsAttr a
