@@ -6,49 +6,51 @@ module HAX.AD.Reverse where
 import HAX.AD.Gradient
 import HAX.Tensor.Tensorial
 
-import Control.Exception
-
 import Data.Proxy
 import Data.List
 
 import Stablehlo.Dialect.Stablehlo.Attributes
-import GHC.IO.Unsafe (unsafePerformIO)
 
-data Reverse r s t = Reverse { primal :: r s t, cotangent :: r s t -> Gradient }
+newtype Reverse r s t = Reverse (r s t, r s t -> Gradient)
+primal :: Reverse r s t -> r s t 
+primal (Reverse t) = fst t
+
+cotangent :: Reverse r s t -> r s t -> Gradient 
+cotangent (Reverse t) = snd t
 
 -- TODO: Restrict this to only continuous types (Float, Double, etc)
 --       Discrete types don't have derivatives
 instance Num (r s t) => Num (Reverse r s t) where
-  (Reverse f f') + (Reverse g g') = 
-    Reverse (f + g) (\ i -> f' i <+> g' i)
+  (Reverse (f, f')) + (Reverse (g, g')) = 
+    Reverse (f + g, \ i -> f' i <+> g' i)
 
-  (Reverse f f') - (Reverse g g') = 
-    Reverse (f - g) (\ i -> f' i <+> g' (negate i))
+  (Reverse (f, f')) - (Reverse (g, g')) = 
+    Reverse (f - g, \ i -> f' i <+> g' (negate i))
 
-  (Reverse f f') * (Reverse g g') = 
-    Reverse (f * g) (\ i -> f' (i * g) <+> g' (i * f))
+  (Reverse (f, f')) * (Reverse (g, g')) = 
+    Reverse (f * g, \ i -> f' (i * g) <+> g' (i * f))
 
-  negate (Reverse f f') = 
-    Reverse (negate f) (f' . negate)
+  negate (Reverse (f, f')) = 
+    Reverse (negate f, f' . negate)
 
-  abs    (Reverse f f') = 
-    Reverse (abs f) (\ i -> f' (i * signum f))
+  abs    (Reverse (f, f')) = 
+    Reverse (abs f, \ i -> f' (i * signum f))
 
-  signum (Reverse f f') = 
-    Reverse (signum f) (\ _ -> f' 0 )
+  signum (Reverse (f, f')) = 
+    Reverse (signum f, \ _ -> f' 0 )
   
   fromInteger a = 
-    Reverse (fromInteger a) (const zero)
+    Reverse (fromInteger a, const zero)
 
 instance Fractional (r s t) => Fractional (Reverse r s t) where
-  recip (Reverse f f') = 
-    Reverse (recip f) (\ i -> f' (negate i / (f * f)))
+  recip (Reverse (f, f')) = 
+    Reverse (recip f, \ i -> f' (negate i / (f * f)))
 
-  (Reverse f f') / (Reverse g g') = 
-    Reverse (f / g) (\ i -> f' (i / g) <+> g' (negate (f / (g * g))))
+  (Reverse (f, f')) / (Reverse (g, g')) = 
+    Reverse (f / g, \ i -> f' (i / g) <+> g' (negate (f / (g * g))))
 
   fromRational r = 
-    Reverse (fromRational r) (const zero)
+    Reverse (fromRational r, const zero)
 
 
 instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s t)) => TensorOp (Reverse r) t where
@@ -56,8 +58,8 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
 
   -- TODO: Find a more elegant way
   unsafeDotGeneral :: forall s0 s1 s2. (KnownShape s0, KnownShape s1, KnownShape s2) => Reverse r s0 t -> Reverse r s1 t -> DotDimensionNumbersAttr -> Reverse r s2 t
-  unsafeDotGeneral (Reverse f f') (Reverse g g') attr = 
-    Reverse (unsafeDotGeneral f g attr) (\ i -> 
+  unsafeDotGeneral (Reverse (f, f')) (Reverse (g, g')) attr = 
+    Reverse (unsafeDotGeneral f g attr, \ i -> 
       let lhsShape     = fromInteger <$> shapeVal p0 :: Num i => [i] 
           rhsShape     = fromInteger <$> shapeVal p1 :: Num i => [i]
           batching     = getBatchingDims attr
@@ -108,8 +110,8 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
           p1 :: Proxy s1 = Proxy
 
   unsafeBroadcast :: forall s0 s1. (KnownShape s0, KnownShape s1) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
-  unsafeBroadcast (Reverse f f') _map = 
-    Reverse (unsafeBroadcast f _map) (\ i -> 
+  unsafeBroadcast (Reverse (f, f')) _map = 
+    Reverse (unsafeBroadcast f _map, \ i -> 
       let reduceDims = 
             let generator :: (Integer, [Integer], Integer) -> [Integer]
                 generator (lower, []  , upper) = [lower..upper]
@@ -124,11 +126,11 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
             in  unsafeBroadcast t secondBroadcast
       in  f' $ reifyShape reductionResult derivative)
 
-  splat i = Reverse (splat i) (const zero)
+  splat i = Reverse (splat i, const zero)
 
   unsafeReduceAdd :: forall s0 s1. (T s0 t, T s1 t) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
-  unsafeReduceAdd (Reverse f f') dims = 
-    Reverse (unsafeReduceAdd f dims) (\ i -> 
+  unsafeReduceAdd (Reverse (f, f')) dims = 
+    Reverse (unsafeReduceAdd f dims, \ i -> 
       let _map = 
             let generator :: (Integer, [Integer], Integer) -> [Integer]
                 generator (lower, []  , upper) = [lower..upper]
@@ -137,8 +139,8 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
       in  f' $ unsafeBroadcast i _map)
 
   unsafeReduceMul :: forall s0 s1. (T s0 t, T s1 t) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
-  unsafeReduceMul (Reverse f f') dims = 
-    Reverse g (\ i -> 
+  unsafeReduceMul (Reverse (f, f')) dims = 
+    Reverse (g, \ i -> 
       let _map = 
             let generator :: (Integer, [Integer], Integer) -> [Integer]
                 generator (lower, []  , upper) = [lower..upper]
