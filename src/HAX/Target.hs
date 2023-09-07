@@ -52,7 +52,7 @@ import GHC.TypeLits
 --  targets is fed into a binary function, they are automatically broadcasted
 -- But this is not done at the site of vmap, which assumes all the inputs feeding it have the same dims and the output has the expected dim, this can easily be solved.
 
-data Target r s t = Target [Integer] (r s t) -- Dynamic because coerce does not work
+data Target r s t = Target [Integer] (r s t)
 type Transformable r t = forall s s'. Coercible (r s t) (r s' t)
 
 capture :: forall r s t. (T s t, TensorOp r t, Transformable r t) => Target r s t -> [Integer] -> Target r s t 
