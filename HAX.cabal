@@ -70,6 +70,7 @@ library
     exposed-modules:  HAX
                       HAX.PjRt
                       HAX.Tensor
+                      HAX.Target
                       HAX.AD
                       HAX.AD.Reverse
                       HAX.AD.Gradient
@@ -80,7 +81,7 @@ library
     -- Modules included in this library but not exported.
     other-modules:    Paths_HAX
                       HAX.Tensor.Tensorial
-                      HAX.Tensor.Target
+                      -- HAX.Tensor.Target
                       HAX.Tensor.Tracer
                       HAX.Tensor.Tensor
                       HAX.PjRt.BufferType

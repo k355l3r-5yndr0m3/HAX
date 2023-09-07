@@ -24,33 +24,6 @@ import GHC.TypeLits
 -- NOTE: Tracer don't need shape infomation, use it to make the code more elegant 
 --       or remove it to avoid error
 
--- Target dim tracer
--- NOTE: The true shape of Tracer is 
---   dim ++ s
--- So, what happen when a binary function encountered two different dims
---   f (x :: [5, 3]) (y :: [5, 3]) (z :: [3]) =         (A)
---     vmap (\ a b -> a + b + z) x y
--- Is equivalent to 
---   f (x :: [5, 3]) (y :: [5, 3]) (z :: [3]) =         (B)
---     vmap (\ a b c -> a + b + c) x y (broadcast z) 
---
--- It is obvious, all parameters of the function that is being vmapped (not correct for now)
---    has the same dims
--- To convert from (A) to (B) is possible by broadcasting so that the dims match up
--- Because of how variable scope work, all the dims that come into contact with eachother have a common suffix
---    and that suffix is the shortest dim, and all dims are suffix of the longest dims. That is to say
---    given a function (f) of arrity n 
---      f :: t1 -> t2 -> .. -> tn -> out
---    the longest dim is dim_max
---        shortest dim is dim_min
---    for all i in [1..n]
---        dim_i isSuffixOf dim_max
---        dim_min isSuffixOf dim_i
--- To ensure correctness, it is enough to broadcast all t_es so that they have the same dims as dim_max. The proof is obvious (I think)
---
--- The `capture` function allow this broadcasting to be done inside function, and the `binary` function allow this to be done automatically whenever two 
---  targets is fed into a binary function, they are automatically broadcasted
--- But this is not done at the site of vmap, which assumes all the inputs feeding it have the same dims and the output has the expected dim, this can easily be solved.
 
 data Target (s :: Shape) t = Target [Integer] (Tracer s t)
 
