@@ -2,11 +2,9 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
 module HAX.Tensor.Target where
-import HAX.Jit
 
 import HAX.Tensor.Tensorial
 import HAX.Tensor.Tracer
-import HAX.Tensor.Tensor
 
 import Control.Exception
 
@@ -137,8 +135,8 @@ instance (T s t, Fractional t) => Fractional (Target s t) where
   fromRational r = Target [] (fromRational r)
 
 
-instance TensorOp Target where
-  unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Target s0 t -> [Integer] -> Target s1 t
+instance Tensorial t => TensorOp Target t where
+  unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Target s0 t -> [Integer] -> Target s1 t
   unsafeBroadcast (Target dim operand) _map = Target dim $ 
     reifyShape (dim ++ shapeVal (Proxy :: Proxy s0)) $ \ s0' -> 
       reifyShape (dim ++ shapeVal (Proxy :: Proxy s1)) $ \ s1' -> 
@@ -150,7 +148,7 @@ instance TensorOp Target where
                 t1 :: Tracer s1' t = unsafeBroadcast t0 _map' 
             in  coerce $! t1
 
-  unsafeReduce :: forall s0 s1 t. (T s0 t, T s1 t) => Target s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> Target s1 t
+  unsafeReduce :: forall s0 s1. (T s0 t, T s1 t) => Target s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> Target s1 t
   unsafeReduce (Target dims operand) body initvalue redims = Target dims $ 
     reifyShape s0 $ \ s0' -> reifyShape s1 $ \ s1' -> 
       result s0' s1'
@@ -163,7 +161,7 @@ instance TensorOp Target where
                 t1 :: Tracer s1' t = unsafeReduce t0 body initvalue redims'
             in  coerce $! t1
 
-  unsafeDotGeneral :: forall s0 s1 s2 t. (T s0 t, T s1 t, T s2 t) => Target s0 t -> Target s1 t -> DotDimensionNumbersAttr -> Target s2 t
+  unsafeDotGeneral :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Target s0 t -> Target s1 t -> DotDimensionNumbersAttr -> Target s2 t
   unsafeDotGeneral lhs rhs attr = Target dims $ 
     reifyShape s0 $ \ s0' -> 
       reifyShape s1 $ \ s1' -> 
@@ -196,8 +194,6 @@ class Vectorizable f where
 
 instance T s t => Vectorizable (Target s t) where
   type Vectorized i (Target s t) = Target (i ': s) t
-
-  -- TODO: Handle to constant case
   vmap' :: forall i. KnownNat i => [Integer] -> ([Integer] -> Target s t) -> Vectorized i (Target s t)
   vmap' dimmax f = Target dimmax $ coerce t
     where i = natVal (Proxy :: Proxy i)
@@ -205,7 +201,6 @@ instance T s t => Vectorizable (Target s t) where
 
 instance (T s t, Vectorizable f) => Vectorizable (Target s t -> f) where
   type Vectorized i (Target s t -> f) = Target (i ': s) t -> Vectorized i f
-
   vmap' :: forall i. KnownNat i => [Integer] -> ([Integer] -> Target s t -> f) -> Vectorized i (Target s t -> f)
   vmap' dimmax f arg@(Target ds _) = vmap' dimmax' f'
     where i = natVal (Proxy :: Proxy i)
@@ -216,7 +211,6 @@ instance (T s t, Vectorizable f) => Vectorizable (Target s t -> f) where
 
 vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b) 
 vmap f = vmap' [] (const f)
-
 
 instance T s t => Traceable (Target s t) where
   trace' i (Target d u) = reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result

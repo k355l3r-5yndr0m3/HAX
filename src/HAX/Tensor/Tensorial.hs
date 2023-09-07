@@ -4,6 +4,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE QuantifiedConstraints #-}
 module HAX.Tensor.Tensorial where
 import HAX.PjRt.BufferType
 
@@ -195,29 +196,36 @@ tensorType _ = RankedTensorType shape _type NullAttr
 tensorType' :: T s t => Proxy (a s t) -> AnyType 
 tensorType' = toAnyType . tensorType
 
-
-class TensorOp (a :: Shape -> Type -> Type) where
+class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
   -- without type checking, internal use only
   -- it is easy to detach type from reality
-  unsafeBroadcast  :: (T s0 t, T s1 t) => a s0 t -> [Integer] -> a s1 t
-  unsafeReduce     :: (T s0 t, T s1 t) => a s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> a s1 t
-  unsafeDotGeneral :: (T s0 t, T s1 t, T s2 t) => a s0 t -> a s1 t -> DotDimensionNumbersAttr -> a s2 t
+  unsafeBroadcast  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
+  -- NOTE unsafeReduce by itself cannot be differentiated, use the other version instead
+  unsafeReduce     :: (KnownShape s0, KnownShape s1) => a s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> a s1 t
+  unsafeDotGeneral :: (KnownShape s0, KnownShape s1, KnownShape s2) => a s0 t -> a s1 t -> DotDimensionNumbersAttr -> a s2 t
+
+  unsafeReduceAdd :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
+  unsafeReduceAdd operand = unsafeReduce operand SHLO._AddOp 0
+
+  unsafeReduceMul :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
+  unsafeReduceMul operand = unsafeReduce operand SHLO._MulOp 1
 
   -- Type checked
-  broadcast  :: (Broadcast org map targ, Tensorial t) => a org t -> Proxy map -> a targ t
+  broadcast :: Broadcast org map targ => a org t -> Proxy map -> a targ t
   broadcast operand (shapeVal -> _map) = unsafeBroadcast operand _map
 
-  broadcast' :: forall org targ t. (Broadcast' org targ, Tensorial t) => a org t -> a targ t  
+  broadcast' :: forall org targ. Broadcast' org targ => a org t -> a targ t
   broadcast' operand = unsafeBroadcast operand _map
     where targ = shapeVal (Proxy :: Proxy targ)
           org  = shapeVal (Proxy :: Proxy org)
           _map = take (length org) [fromIntegral (length targ - length org)..] 
 
-  reduceAdd :: (T s t, Num t, KnownShape r, T (Reduce s r) t) => a s t -> Proxy r -> a (Reduce s r) t
-  reduceAdd operand (shapeVal -> dims) = unsafeReduce operand SHLO._AddOp 0 dims 
 
-  reduceMul :: (T s t, Num t, KnownShape r, T (Reduce s r) t) => a s t -> Proxy r -> a (Reduce s r) t
-  reduceMul operand (shapeVal -> dims) = unsafeReduce operand SHLO._MulOp 1 dims
+  reduceAdd :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
+  reduceAdd operand = unsafeReduceAdd operand . shapeVal
+
+  reduceMul :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
+  reduceMul operand = unsafeReduceMul operand . shapeVal
   
   -- TODO: Implement + - * / etc with automatic broadcasting
   prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
@@ -228,8 +236,9 @@ class TensorOp (a :: Shape -> Type -> Type) where
   matmul lhs rhs = unsafeDotGeneral lhs rhs attr
     where attr = DotDimensionNumbersAttr { getContractingDims = [(1, 0)], getBatchingDims = [] }
 
-  splat :: T s t => t -> a s t
+  splat :: KnownShape s => t -> a s t
 
-(|#|) :: (TensorOp a, TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
+
+(|#|) :: (TensorOp a t, TensorProductConstraint l r p) => a l t -> a r t -> a p t
 (|#|) = prod
 infixl 8 |#|

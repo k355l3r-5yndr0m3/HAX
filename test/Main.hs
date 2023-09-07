@@ -5,6 +5,8 @@ module Main (main) where
 
 import HAX.Tensor
 import HAX.PjRt 
+import HAX.AD
+import HAX.AD.Reverse
 
 import Data.Proxy
 import GHC.IsList
@@ -15,8 +17,6 @@ test2 :: Target '[5] Float -> Target '[5] Float -> Target '[5] Float
 test2 = (-)
 test3 :: Target '[5] Float -> Target '[5] Float -> Target '[5] Float 
 test3 = (*)
-test4 :: Target '[6, 1] Float 
-test4 = 0
 
 -- test5 :: Target '[5] Float -> Target '[7] Float -> Target '[5, 7] Float
 -- test5 = prod
@@ -59,6 +59,24 @@ test12 x y z =
 test13 :: Target [5, 2] Float -> Target '[2] Float -> Target [5, 2] Float
 test13 x y = vmap (const y) x
 
+test14 :: Target [5, 2] Float -> Target [2, 5] Float
+test14 operand = broadcast operand (Proxy :: Proxy '[1, 0])
+
+-- differentiation test
+type RTracer = Reverse Tracer
+test15 :: RTracer '[4, 3, 6] Float -> RTracer '[4, 3, 6] Float 
+test15 = negate
+
+test16 :: RTracer '[4] Float -> RTracer '[3, 4, 5] Float 
+test16 = (`broadcast` (Proxy :: Proxy '[1]))
+
+test17 :: RTracer '[4] Float -> RTracer '[3] Float -> RTracer '[4, 3] Float 
+test17 = prod
+
+
+
+traceDebugGrad :: (Rev (GradResult f) f ~ (a -> b), Traceable (a -> b), ReverseMode f) => f -> IO () 
+traceDebugGrad x = traceDebug $ rgrad x
 main :: IO ()
 main = do 
   traceDebug test1
@@ -77,8 +95,14 @@ main = do
   traceDebug test12
   traceDebug test13
 
-  let tensor :: Tensor '[5, 5] Float = fromList [[i..i+4] | i <- [0..4]]
-  print tensor
+  traceDebug test14
+
+--  let tensor :: Tensor '[5, 5] Float = fromList [[i..i+4] | i <- [0..4]]
+--  print tensor
+
+  traceDebugGrad test15
+  traceDebugGrad test16
+  traceDebugGrad test17
 
   clientDestroy client
   return ()

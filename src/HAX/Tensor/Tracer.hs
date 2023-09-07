@@ -191,8 +191,8 @@ instance AttrGet ReduceDims where
 instance DenseIntOrFPElementsAttr ReduceDims
 instance DenseIntElementsAttr ReduceDims
 
-instance TensorOp Tracer where
-  unsafeBroadcast :: forall s s' t. (T s t, T s' t) => Tracer s t -> [Integer] -> Tracer s' t
+instance Tensorial t => TensorOp Tracer t where
+  unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeBroadcast operand idxmap@(BroadcastMap . fmap fromInteger -> _map) = 
     assert correctness $ mkTracer $ do 
     _operand <- sharing operand
@@ -202,13 +202,13 @@ instance TensorOp Tracer where
             let isUnique :: [Integer] -> Bool
                 isUnique []     = True
                 isUnique (a:as) = notElem a as && isUnique as
-                src = shapeVal (Proxy :: Proxy s)
-                dst = shapeVal (Proxy :: Proxy s')
+                src = shapeVal (Proxy :: Proxy s0)
+                dst = shapeVal (Proxy :: Proxy s1)
             in  isUnique idxmap && src == fmap (dst !!) (fromInteger <$> idxmap)
-          _type = tensorType' (Proxy :: Proxy (Tracer s' t))
+          _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
 
   -- TODO: Add runtime checking
-  unsafeReduce :: forall s0 s1 t. (T s0 t, T s1 t) => Tracer s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> Tracer s1 t
+  unsafeReduce :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> Tracer s1 t
   unsafeReduce operand body (splat -> initvalue :: Tracer '[] t) dims = mkTracer $ do 
     _operand   <- sharing operand
     _initvalue <- sharing initvalue
@@ -222,15 +222,15 @@ instance TensorOp Tracer where
     where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
           _dims = ReduceDims (fromInteger <$> dims)
           scalar = tensorType' (Proxy :: Proxy (Tracer '[] t))
-  
-  unsafeDotGeneral :: forall s0 s1 s2 t. (T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 t -> DotDimensionNumbersAttr -> Tracer s2 t
+
+  unsafeDotGeneral :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 t -> DotDimensionNumbersAttr -> Tracer s2 t
   unsafeDotGeneral lhs rhs attr = mkTracer $ do 
     _lhs <- sharing lhs 
     _rhs <- sharing rhs 
     retval $ SHLO._DotGeneralOp attr Nothing _lhs _rhs _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
 
-  splat :: forall s t. T s t => t -> Tracer s t
+  splat :: forall s. T s t => t -> Tracer s t
   splat value = mkTracer $ do 
     retval $ SHLO._ConstantOp (denseSplatAttr shape value) _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))

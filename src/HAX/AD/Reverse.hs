@@ -1,8 +1,18 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE QuantifiedConstraints #-}
 module HAX.AD.Reverse where
+
 import HAX.AD.Gradient
 import HAX.Tensor.Tensorial
+
+import Control.Exception
+
+import Data.Proxy
+import Data.List
+
+import Stablehlo.Dialect.Stablehlo.Attributes
+import GHC.IO.Unsafe (unsafePerformIO)
 
 data Reverse r s t = Reverse { primal :: r s t, cotangent :: r s t -> Gradient }
 
@@ -40,5 +50,99 @@ instance Fractional (r s t) => Fractional (Reverse r s t) where
   fromRational r = 
     Reverse (fromRational r) (const zero)
 
-instance TensorOp r => TensorOp (Reverse r) where
-  
+
+instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s t)) => TensorOp (Reverse r) t where
+  unsafeReduce = error "unsafeReduce is not directly differentiable, use reduceAdd or reduceSum instead"  
+
+  -- TODO: Find a more elegant way
+  unsafeDotGeneral :: forall s0 s1 s2. (KnownShape s0, KnownShape s1, KnownShape s2) => Reverse r s0 t -> Reverse r s1 t -> DotDimensionNumbersAttr -> Reverse r s2 t
+  unsafeDotGeneral (Reverse f f') (Reverse g g') attr = 
+    Reverse (unsafeDotGeneral f g attr) (\ i -> 
+      let lhsShape     = fromInteger <$> shapeVal p0 :: Num i => [i] 
+          rhsShape     = fromInteger <$> shapeVal p1 :: Num i => [i]
+          batching     = getBatchingDims attr
+          contracting  = getContractingDims attr
+          batchShape   = map ((lhsShape !!) . fromIntegral . fst) batching -- NOTE: This does not check for dimensional consistency, TODO: add assertion later
+          -- the *OtherDims are indices that are neither the batching dimensions nor the contracted dimensions
+          lhsOtherDims = gel (0, map fst (batching ++ contracting), fromInteger $ shapeRank p0 - 1)
+          rhsOtherDims = gel (0, map snd (batching ++ contracting), fromInteger $ shapeRank p1 - 1)
+          -- the *OtherShape is the shape
+          lhsOtherShape = map ((lhsShape !!) . fromIntegral) lhsOtherDims
+          rhsOtherShape = map ((rhsShape !!) . fromIntegral) rhsOtherDims
+          -- `unsafeDotGeneral f g attr` is expected to have the shape batchShape ++ lhsOtherShape ++ rhsOtherShape (see stablehlo specs)
+          -- constractShape is like batchShape but for constracting dims. TODO: Add assertion
+          contractShape = map ((lhsShape !!) . fromIntegral . fst) contracting
+          df :: r s0 t = 
+            let -- intermediateShape is the shape of the output from the general dot produce between i and g
+                intermediateShape = batchShape ++ lhsOtherShape ++ contractShape
+                df' :: forall si. KnownShape si => Proxy si -> r s0 t
+                df' _ =  
+                  let attr' = DotDimensionNumbersAttr {
+                        getBatchingDims    = zip [0..] (map snd batching),
+                        getContractingDims = zip [fromIntegral $ length batching + length lhsOtherDims..] rhsOtherDims
+                      }
+                      d :: r si t = unsafeDotGeneral i g attr'
+                      transposition = fromIntegral <$> map fst batching ++ lhsOtherDims ++ map fst contracting
+                  in  unsafeBroadcast d transposition
+            in  reifyShape intermediateShape df'
+          dg :: r s1 t = 
+            let intermediateShape = batchShape ++ contractShape ++ rhsOtherShape
+                dg' :: forall si. KnownShape si => Proxy si -> r s1 t 
+                dg' _ = 
+                  let attr' = DotDimensionNumbersAttr {
+                        getBatchingDims    = zip (map fst batching) [0..],
+                        getContractingDims = zip lhsOtherDims [fromIntegral $ length batching..]
+                      }
+                      d :: r si t = unsafeDotGeneral f i attr'
+                      transposition = fromIntegral <$> map snd batching ++ map snd contracting ++ rhsOtherDims
+                  in  unsafeBroadcast d transposition
+            in  reifyShape intermediateShape dg'
+      in  f' df <+> g' dg)
+    where gel :: (Num i, Ord i, Enum i) => (i, [i], i) -> [i] -- Generate exclusive list
+          gel (start, exclude, end) = 
+            let gel' :: (Num i, Ord i, Enum i) => (i, [i], i) -> [i]
+                gel' (s, []  , e) = [s..e]
+                gel' (s, a:as, e) = [s..a-1] ++ gel' (a+1,as,e)
+            in  gel' (start, sort exclude, end)
+          p0 :: Proxy s0 = Proxy
+          p1 :: Proxy s1 = Proxy
+
+  unsafeBroadcast :: forall s0 s1. (KnownShape s0, KnownShape s1) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
+  unsafeBroadcast (Reverse f f') _map = 
+    Reverse (unsafeBroadcast f _map) (\ i -> 
+      let reduceDims = 
+            let generator :: (Integer, [Integer], Integer) -> [Integer]
+                generator (lower, []  , upper) = [lower..upper]
+                generator (lower, a:as, upper) = [lower..a - 1] ++ generator (a + 1, as, upper)
+            in  generator (0, sort _map, shapeRank (Proxy :: Proxy s1) - 1)
+          (secondBroadcast, reductionResult) = 
+            let indexedIndices = zip (zip [0..] (shapeVal (Proxy :: Proxy s0))) _map 
+            in  unzip (fst <$> sortOn snd indexedIndices)
+          derivative :: forall c. KnownShape c => Proxy c -> r s0 t
+          derivative _ = 
+            let t :: r c t = unsafeReduceAdd i reduceDims
+            in  unsafeBroadcast t secondBroadcast
+      in  f' $ reifyShape reductionResult derivative)
+
+  splat i = Reverse (splat i) (const zero)
+
+  unsafeReduceAdd :: forall s0 s1. (T s0 t, T s1 t) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
+  unsafeReduceAdd (Reverse f f') dims = 
+    Reverse (unsafeReduceAdd f dims) (\ i -> 
+      let _map = 
+            let generator :: (Integer, [Integer], Integer) -> [Integer]
+                generator (lower, []  , upper) = [lower..upper]
+                generator (lower, a:as, upper) = [lower..a - 1] ++ generator (a + 1, as, upper)
+            in  generator (0, dims, shapeRank (Proxy :: Proxy s0) - 1)
+      in  f' $ unsafeBroadcast i _map)
+
+  unsafeReduceMul :: forall s0 s1. (T s0 t, T s1 t) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
+  unsafeReduceMul (Reverse f f') dims = 
+    Reverse g (\ i -> 
+      let _map = 
+            let generator :: (Integer, [Integer], Integer) -> [Integer]
+                generator (lower, []  , upper) = [lower..upper]
+                generator (lower, a:as, upper) = [lower..a - 1] ++ generator (a + 1, as, upper)
+            in  generator (0, dims, shapeRank (Proxy :: Proxy s0) - 1)
+      in  f' (unsafeBroadcast (i * g) _map / f))
+    where g = unsafeReduceMul f dims
