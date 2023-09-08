@@ -2,6 +2,8 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE UndecidableInstances #-}
 module HAX.Jit where
 
 import HAX.Tensor.Tensorial
@@ -48,10 +50,5 @@ jit :: f ~ (a -> b) => f -> Jit' f
 jit f = jit' (jitInit f)
 
 
-
-
-
-
-
-
+  
 
