@@ -112,6 +112,18 @@ type family ReduceImpl (l :: [Maybe a]) (r :: Shape) :: [Maybe a] where
   ReduceImpl l (a ': as) = ReduceImpl (ReplaceAtIdx l a 'Nothing) as
 type Reduce l r = FromMaybeList (ReduceImpl (ToMaybeList l) r)
 
+type family SameLength (lhs :: [a]) (rhs :: [a]) (e :: Constraint) :: Constraint where
+  SameLength '[]       '[]       _ = ()
+  SameLength (l ': ls) (r ': rs) e = SameLength ls rs e
+  SameLength _         _         e = e
+
+type family TransposeImpl (operand :: Shape) (perm :: Shape) :: Shape where
+  TransposeImpl operand '[]       = '[]
+  TransposeImpl operand (a ': as) = ShapeNatAt operand a ': TransposeImpl operand as
+
+type Transpose operand perm result = (SameLength operand perm (TypeError (ShowType operand :<>: Text " must be the same length as " :<>: ShowType perm)), 
+                                      result ~ TransposeImpl operand perm, KnownShape perm, KnownShape operand, KnownShape result)
+
 -- Tensorial
 class (Prim a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
   type SHLOType a
@@ -203,12 +215,15 @@ class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
   -- NOTE unsafeReduce by itself cannot be differentiated, use the other version instead
   unsafeReduce     :: (KnownShape s0, KnownShape s1) => a s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> a s1 t
   unsafeDotGeneral :: (KnownShape s0, KnownShape s1, KnownShape s2) => a s0 t -> a s1 t -> DotDimensionNumbersAttr -> a s2 t
+  unsafeTranspose  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
+
 
   unsafeReduceAdd :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
   unsafeReduceAdd operand = unsafeReduce operand SHLO._AddOp 0
 
   unsafeReduceMul :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
   unsafeReduceMul operand = unsafeReduce operand SHLO._MulOp 1
+
 
   -- Type checked
   broadcast :: Broadcast org map targ => a org t -> Proxy map -> a targ t
@@ -220,6 +235,8 @@ class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
           org  = shapeVal (Proxy :: Proxy org)
           _map = take (length org) [fromIntegral (length targ - length org)..] 
 
+  transpose :: Transpose operand perm result => a operand t -> Proxy perm -> a result t
+  transpose operand = unsafeTranspose operand . shapeVal
 
   reduceAdd :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
   reduceAdd operand = unsafeReduceAdd operand . shapeVal

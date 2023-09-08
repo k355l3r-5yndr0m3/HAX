@@ -84,8 +84,9 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
                         getContractingDims = zip [fromIntegral $ length batching + length lhsOtherDims..] rhsOtherDims
                       }
                       d :: r si t = unsafeDotGeneral i g attr'
-                      transposition = fromIntegral <$> map fst batching ++ lhsOtherDims ++ map fst contracting
-                  in  unsafeBroadcast d transposition
+                      transposition = map fst batching ++ lhsOtherDims ++ map fst contracting
+                      perm          = map snd $ sortOn fst $ zip transposition [0..]
+                  in  unsafeTranspose d perm -- unsafeBroadcast d transposition
             in  reifyShape intermediateShape df'
           dg :: r s1 t = 
             let intermediateShape = batchShape ++ contractShape ++ rhsOtherShape
@@ -96,8 +97,9 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
                         getContractingDims = zip lhsOtherDims [fromIntegral $ length batching..]
                       }
                       d :: r si t = unsafeDotGeneral f i attr'
-                      transposition = fromIntegral <$> map snd batching ++ map snd contracting ++ rhsOtherDims
-                  in  unsafeBroadcast d transposition
+                      transposition = map snd batching ++ map snd contracting ++ rhsOtherDims
+                      perm          = map snd $ sortOn fst $ zip transposition [0..]
+                  in  unsafeTranspose d perm -- unsafeBroadcast d transposition
             in  reifyShape intermediateShape dg'
       in  f' df <+> g' dg)
     where gel :: (Num i, Ord i, Enum i) => (i, [i], i) -> [i] -- Generate exclusive list
@@ -127,6 +129,13 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
       in  f' $ reifyShape reductionResult derivative)
 
   splat i = Reverse (splat i, const zero)
+
+  unsafeTranspose :: forall s0 s1. (KnownShape s0, KnownShape s1) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
+  unsafeTranspose (Reverse (f, f')) perm = 
+    Reverse (unsafeTranspose f perm, \ i -> 
+      let perm' = map snd $ sortOn fst $ zip perm [0..] 
+      in  f' (unsafeTranspose i perm'))
+
 
   unsafeReduceAdd :: forall s0 s1. (T s0 t, T s1 t) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
   unsafeReduceAdd (Reverse (f, f')) dims = 

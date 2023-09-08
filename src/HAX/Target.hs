@@ -2,9 +2,16 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ViewPatterns #-}
 module HAX.Target where
 import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
+
+import HAX.AD.Gradient
+import HAX.AD.Reverse
+import HAX.AD
+
+import HAX.Utils
 
 import Control.Exception
 
@@ -13,10 +20,12 @@ import Data.Proxy
 import Data.List
 import Data.Functor
 import Data.Bifunctor
-import Data.IntMap.Strict
+import Data.IntMap.Strict hiding (null, map)
 
 import MLIR
 import Stablehlo.Dialect.Stablehlo.Attributes
+
+import Foreign.C (CIntPtr)
 
 import GHC.TypeLits
 
@@ -56,7 +65,9 @@ data Target r s t = Target [Integer] (r s t)
 type Transformable r t = forall s s'. Coercible (r s t) (r s' t)
 
 capture :: forall r s t. (T s t, TensorOp r t, Transformable r t) => Target r s t -> [Integer] -> Target r s t 
-capture (Target di u) dmax = assert (di `isSuffixOf` dmax) $ 
+capture (Target di u) dmax 
+  | di == dmax = Target di u
+  | otherwise  = assert (di `isSuffixOf` dmax) $
   Target dmax $
     reifyShape src $ \ s0 -> reifyShape dst $ \ s1 -> 
       result s0 s1
@@ -174,8 +185,19 @@ instance (Tensorial t, TensorOp r t, Transformable r t) => TensorOp (Target r) t
                 t2 :: r s2' t = unsafeDotGeneral t0 t1 attr'
             in  coerce $! t2
 
-  splat = Target [] . splat
+  unsafeTranspose :: forall s0 s1. (KnownShape s0, KnownShape s1) => Target r s0 t -> [Integer] -> Target r s1 t
+  unsafeTranspose (Target dim operand) perm = Target dim $ 
+    reifyShape (dim ++ shapeVal (Proxy :: Proxy s0)) $ \ s -> 
+      reifyShape (dim ++ shapeVal (Proxy :: Proxy s1)) $ \ s' ->
+        result s s'
+    where result :: forall s s'. (KnownShape s, KnownShape s') => Proxy s -> Proxy s' -> r s1 t 
+          result _ _ = 
+            let t0 :: r s  t = coerce operand
+                t1 :: r s' t = unsafeTranspose t0 perm'
+            in  coerce $! t1
+          perm' = [0..fromIntegral (length dim - 1)] ++ map (+ (fromIntegral $ length dim)) perm
 
+  splat = Target [] . splat
 
 class Vectorizable f where
   type Vectorized (i :: Nat) f = r | r -> i f
@@ -197,7 +219,6 @@ instance (T s t, TensorOp r t, Transformable r t, Vectorizable f) => Vectorizabl
             let Target _ u = capture arg dim
             in  f dim $ Target (dim ++ [i]) (coerce u)
           dimmax' = if length dimmax < length ds then ds else dimmax
-
 vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b) 
 vmap f = vmap' [] (const f)
 
@@ -211,3 +232,18 @@ instance (T s t, Traceable f) => Traceable (Target Tracer s t -> f) where
   trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
     where argn = Target [] $ Tracer (\ a -> (a, ) <$> blockArg i)
           _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
+
+-- currently, this is not possible `vmap (rgrad f)` but this should be possible `rgrad (vmap f)` which should be identical
+instance (Cotangent (r0 s0 t0), Num (r s t)) => ReverseMode (Target (Reverse r0) s0 t0 -> Target (Reverse r) s t) where
+  type Rev g (Target (Reverse r0) s0 t0 -> Target (Reverse r) s t) = Target r0 s0 t0 -> g
+  type GradResult (Target (Reverse r0) s0 t0 -> Target (Reverse r) s t) = Target r0 s0 t0
+  rgrad' (g, i) f (Target dim t) = assert (null dim && null dim') $ g (cotangent g' 1)
+    where Target dim' g' = f (Target dim $ Reverse (t, independent i))
+  rgradReify (Annotated idx) (reifyGrad idx -> (g, Gradient g')) = assert (null g') $ Target [] g
+
+instance (ReverseMode (a -> f), Cotangent (r s t)) => ReverseMode (Target (Reverse r) s t -> a -> f) where
+  type Rev g (Target (Reverse r) s t -> a -> f) = Target r s t -> Rev g (a -> f)
+  type GradResult (Target (Reverse r) s t -> a -> f) = Target r s t <+> GradResult (a -> f)
+  rgrad' (g, i) f (Target dim t) = assert (null dim) $ rgrad' (g, i + 1) (f $ Target [] $ Reverse (t, independent i))
+  rgradReify (Annotated idx) (reifyGrad idx -> (g, g')) = Target [] g :+: rgradReify (Annotated (idx + 1) :: Annotated CIntPtr (a -> f)) g'

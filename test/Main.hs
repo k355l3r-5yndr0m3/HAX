@@ -10,7 +10,6 @@ import HAX.AD.Reverse
 import HAX.Target
 
 import Data.Proxy
-import GHC.IsList
 
 test1 :: Target Tracer '[5] Float -> Target Tracer '[5] Float -> Target Tracer '[5] Float 
 test1 = (+)
@@ -19,6 +18,8 @@ test2 = (-)
 test3 :: Target Tracer '[5] Float -> Target Tracer '[5] Float -> Target Tracer '[5] Float 
 test3 = (*)
 
+test4 :: Target Tracer '[5] Float -> Target Tracer '[5] Float -> Target Tracer '[5] Float 
+test4 = vmap (+)
 -- test5 :: Target Tracer '[5] Float -> Target Tracer '[7] Float -> Target Tracer '[5, 7] Float
 -- test5 = prod
 -- 
@@ -74,6 +75,21 @@ test16 = (`broadcast` (Proxy :: Proxy '[1]))
 test17 :: RTracer '[4] Float -> RTracer '[3] Float -> RTracer '[4, 3] Float 
 test17 = prod
 
+-- vmap differentiablity
+test18 :: Target (Reverse Tracer) '[5, 3] Float -> Target (Reverse Tracer) '[5, 3] Float -> Target (Reverse Tracer) '[5, 3] Float
+test18 = vmap (+)
+
+test19 :: Target (Reverse Tracer) '[5, 3] Float -> Target (Reverse Tracer) '[5, 3] Float -> Target (Reverse Tracer) '[5, 3] Float
+test19 = (+)
+
+test20 :: Target (Reverse Tracer) [10, 5, 6] Float
+               -> Target (Reverse Tracer) [10, 5, 2] Float
+               -> Target (Reverse Tracer) [6, 2] Float
+               -> Target (Reverse Tracer) [10, 5, 2] Float 
+test20 x y z = 
+  vmap (\ (a :: Target (Reverse Tracer) '[5, 6] Float) (b :: Target (Reverse Tracer) '[5, 2] Float) -> 
+    matmul a z + b) 
+      x (y :: Target (Reverse Tracer) '[10, 5, 2] Float)
 
 
 traceDebugGrad :: (Rev (GradResult f) f ~ (a -> b), Traceable (a -> b), ReverseMode f) => f -> IO () 
@@ -104,6 +120,12 @@ main = do
   traceDebugGrad test15
   traceDebugGrad test16
   traceDebugGrad test17
+
+  traceDebugGrad test18
+  traceDebugGrad test19
+
+  traceDebug     test4
+  traceDebugGrad test20
 
   clientDestroy client
   return ()

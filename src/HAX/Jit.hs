@@ -46,3 +46,12 @@ class Traceable f => Jit (t :: Shape -> Type -> Type) (f :: Type) where
 
 jit :: f ~ (a -> b) => f -> Jit' f
 jit f = jit' (jitInit f)
+
+
+
+
+
+
+
+
+

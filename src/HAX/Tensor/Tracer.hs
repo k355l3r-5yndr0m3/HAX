@@ -12,7 +12,7 @@ import HAX.Jit
 
 import Control.Exception
 
-import Data.IntMap.Strict hiding (singleton, null)
+import Data.IntMap.Strict hiding (singleton, null, map, foldl)
 import Data.List (singleton)
 import Data.Proxy
 import Data.Bifunctor
@@ -169,7 +169,7 @@ instance (T s t, JitTracer f) => Jit Tracer (Tracer s t -> f) where
 
 newtype BroadcastMap = BroadcastMap [Word64]
 getBroadcastMap :: KnownShape s => Proxy s -> BroadcastMap
-getBroadcastMap = BroadcastMap . fmap fromInteger . shapeVal
+getBroadcastMap = BroadcastMap . map fromInteger . shapeVal
 instance AttrGet BroadcastMap where
   attrGet (BroadcastMap mapping) = 
     if null mapping then 
@@ -181,7 +181,7 @@ instance DenseIntElementsAttr BroadcastMap
 
 newtype ReduceDims = ReduceDims [Word64]
 getReduceDims :: KnownShape s => Proxy s -> ReduceDims
-getReduceDims = ReduceDims . fmap fromInteger . shapeVal
+getReduceDims = ReduceDims . map fromInteger . shapeVal
 instance AttrGet ReduceDims where
   attrGet (ReduceDims dims) = 
     if null dims then 
@@ -190,6 +190,18 @@ instance AttrGet ReduceDims where
       attrGet $ DenseIntOrFPElements (VectorType [fromIntegral $ length dims] I64) dims
 instance DenseIntOrFPElementsAttr ReduceDims
 instance DenseIntElementsAttr ReduceDims
+
+newtype TransposePerm = TransposePerm [Word64]
+getTransposePerm :: KnownShape s => Proxy s -> TransposePerm 
+getTransposePerm = TransposePerm . map fromInteger . shapeVal
+instance AttrGet TransposePerm where
+  attrGet (TransposePerm perm) = 
+    if null perm then 
+      attrGet $ DenseIntOrFPElements (RankedTensorType [0] I64 NullAttr) perm
+    else
+      attrGet $ DenseIntOrFPElements (VectorType [fromIntegral $ length perm] I64) perm
+instance DenseIntOrFPElementsAttr TransposePerm
+instance DenseIntElementsAttr TransposePerm
 
 instance Tensorial t => TensorOp Tracer t where
   unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
@@ -235,3 +247,20 @@ instance Tensorial t => TensorOp Tracer t where
     retval $ SHLO._ConstantOp (denseSplatAttr shape value) _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
           shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+
+  unsafeTranspose :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> [Integer] -> Tracer s1 t
+  unsafeTranspose operand perm = assert correctness $ mkTracer $ do 
+    _operand <- sharing operand 
+    if perm == [0..fromIntegral $ length perm - 1] then -- degenerate case
+      return _operand 
+    else 
+      retval $ SHLO._TransposeOp attr _operand _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+          correctness = 
+            let uniqueness :: [Integer] -> Bool
+                uniqueness []     = True
+                uniqueness (a:as) = notElem a as && uniqueness as
+                operandShape = shapeVal (Proxy :: Proxy s0)
+                resultShape  = shapeVal (Proxy :: Proxy s1)
+            in  uniqueness perm && resultShape == map ((operandShape !!) . fromInteger) perm
+          attr = TransposePerm (fromInteger <$> perm)

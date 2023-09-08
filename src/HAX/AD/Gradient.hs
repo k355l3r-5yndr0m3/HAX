@@ -25,5 +25,3 @@ reifyGrad idx (Gradient gradient) = (grad, other)
         grad = sum $ fmap (fromJust . fromDynamic) g
 
 type Cotangent t = (Typeable t, Num t)
-
-

@@ -28,6 +28,7 @@ import MLIR
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
 newtype Tensor (s :: Shape) a = Tensor { getUnderlyingBuffer :: Buffer }
+-- TODO: Consider removing the class Trace, it is currently doing nothing
 class Trace (t :: Shape -> Type -> Type) where
   auto :: forall s a. T s a => Tensor s a -> t s a
 
@@ -191,6 +192,7 @@ instance Tensorial t => TensorOp Tensor t where
   unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand
   unsafeReduce operand body initvalue redims = jit (\ _operand -> unsafeReduce _operand body initvalue redims) operand
   unsafeDotGeneral lhs rhs attr = jit (\ _lhs _rhs -> unsafeDotGeneral _lhs _rhs attr) lhs rhs
+  unsafeTranspose operand perm = jit (`unsafeTranspose` perm) operand
 
   splat a = unsafePerformIO $ tensorSplat defaultDevice a
 
