@@ -1,21 +1,21 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE UndecidableInstances #-}
 module HAX.Jit where
 
 import HAX.Tensor.Tensorial
 
 import HAX.PjRt
+import HAX.Utils
 
-import Data.Kind
+import Control.Exception
 
 import MLIR
 
 import qualified MLIR.Dialect.Func           as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
+
+import GHC.IO.Unsafe
 
 compile :: Traceable (a -> b) => (a -> b) -> IO (Int, LoadedExecutable)
 compile f = (length outs, ) <$> (
@@ -36,19 +36,28 @@ compile f = (length outs, ) <$> (
   where (blkM, (ins, outs)) = trace f
 
 
-type Jit' f = forall t. Jit t f => JitResult t f
-class Traceable f => Jit (t :: Shape -> Type -> Type) (f :: Type) where
-  type JitResult t f = r | r -> t f
-  type JitCache  t f = c | c -> t f
+type JitData f = (Annotated [Buffer] f, (Int, LoadedExecutable))
+class JitReify f where 
+  jitReify :: Annotated [Buffer] f -> (f, [Buffer])
 
-  jit' :: JitCache t f -> JitResult t f
-  jitInit :: f -> JitCache t f
+class Jit f where
+  jit' :: JitData f -> f
 
-  jitReify :: [Buffer] -> (JitResult t f, [Buffer])
+instance (JitReify a, JitReify b) => JitReify (a <+> b) where
+  jitReify (Annotated outs) = (a :+: b, bs)
+    where (a, as) = jitReify (Annotated outs :: Annotated [Buffer] a)
+          (b, bs) = jitReify (Annotated as   :: Annotated [Buffer] b)
 
-jit :: f ~ (a -> b) => f -> Jit' f
-jit f = jit' (jitInit f)
+instance (JitReify a, JitReify b) => Jit (a <+> b) where
+  jit' (Annotated args, (nout, program)) = assert (null leftover) result
+    where outputs :: Annotated [Buffer] (a <+> b) = Annotated . unsafePerformIO $ loadedExecutableExecute1Await program args Nothing nout
+          (result, leftover) = jitReify outputs
 
+type family JitTransform a
+type family JitResult f where
+  JitResult (a ->  b) = JitTransform a -> JitResult b
+  JitResult (a <+> b) = JitResult a <+> JitResult b
+  JitResult a         = JitTransform a
 
-  
-
+jit :: forall a b f f'. (Traceable f, Jit f', f' ~ JitResult f, f ~ (a -> b)) => f -> f' 
+jit f = jit' (Annotated [] :: Annotated [Buffer] f', unsafePerformIO $ compile f)

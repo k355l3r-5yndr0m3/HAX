@@ -117,55 +117,14 @@ instance (T s t, Fractional t) => Fractional (Tracer s t) where
           shape      = fromIntegral <$> shapeVal (Proxy :: Proxy s)
           a :: t     = fromRational literal
 
-
-
-
 instance T s t => Traceable (Tracer s t) where
   trace' _ u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
 
 instance (T s t, Traceable f) => Traceable (Tracer s t -> f) where 
   trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
     where argn = Tracer (\ a -> (a, ) <$> blockArg i)
           _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
-
-type JitTracer f = (Jit Tracer f, f ~ JitCache Tracer f)
-instance Jit Tracer (Proxy (Tracer s t)) where
-  type JitResult Tracer (Proxy (Tracer s t)) = Proxy (Tracer s t)
-  type JitCache  Tracer (Proxy (Tracer s t)) = Proxy (Tracer s t)
-
-  jit' = id
-  jitInit = id
-  jitReify = undefined
-
-instance T s t => Jit Tracer (Tracer s t) where
-  type JitResult Tracer (Tracer s t) = Tracer s t
-  type JitCache  Tracer (Tracer s t) = Tracer s t
-  
-  jit' = id
-  jitInit = id
-  jitReify = undefined
-
-
--- Because <+> can form binary tree, great care is needed to flaten and unflaten it
-instance (JitTracer a, JitTracer b) => Jit Tracer (a <+> b) where
-  type JitResult Tracer (a <+> b) = JitResult Tracer a <+> JitResult Tracer b
-  type JitCache  Tracer (a <+> b) = a <+> b
-  
-  jit' (a :+: b) = jit' a :+: jit' b
-  jitInit = id
-  jitReify = undefined
-
-instance (T s t, JitTracer f) => Jit Tracer (Tracer s t -> f) where
-  type JitResult Tracer (Tracer s t -> f) = Tracer s t -> f
-  type JitCache  Tracer (Tracer s t -> f) = Tracer s t -> f
-
-  jit' = id
-  jitInit = id
-  jitReify = undefined
-
 
 newtype BroadcastMap = BroadcastMap [Word64]
 getBroadcastMap :: KnownShape s => Proxy s -> BroadcastMap

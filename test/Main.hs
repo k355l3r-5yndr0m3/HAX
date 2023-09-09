@@ -8,6 +8,7 @@ import HAX.PjRt
 import HAX.AD
 import HAX.AD.Reverse
 import HAX.Target
+import HAX.Jit
 
 import Data.Proxy
 
@@ -126,6 +127,24 @@ main = do
 
   traceDebug     test4
   traceDebugGrad test20
+
+  let a :: Tensor '[4, 5] Float = 
+        [[ 1, 2, 3, 4, 5], 
+         [-1,-2,-3,-4,-5],
+         [ 6,-2, 5, 9,-1],
+         [-7, 3, 2, 8, 6]]
+      b :: Tensor '[5, 1] Float = 
+        [[1],[2],[3],[4],[5]]
+      c = matmul a b
+
+  print =<< debugTensorShape c
+  print c
+  let d :: Tensor '[4, 1] Float = [[1], [2], [3], [4]]
+  print d
+
+
+  let e = jit test10
+  print $ e 1
 
   clientDestroy client
   return ()

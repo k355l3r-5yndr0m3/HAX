@@ -34,3 +34,9 @@ void buffer_to_host_buffer__event_await(PJRT_Api *api, PJRT_Buffer *src, PJRT_Bu
     API_CALL_CATCHER(Event_Await, fatal_error, .event = event);
     API_CALL_CATCHER(Event_Destroy, fatal_error, .event = event);
 }
+
+const int64_t *buffer_dimensions(PJRT_Api *api, PJRT_Buffer *buffer, size_t *rank_out) {
+    auto result = API_CALL_CATCHER(Buffer_Dimensions, fatal_error, .buffer = buffer);
+    *rank_out = result.num_dims;
+    return result.dims;
+}

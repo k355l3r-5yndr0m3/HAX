@@ -83,6 +83,10 @@ bufferToHostBuffer (Buffer b) =
   withForeignPtr b $ \ b' -> 
     C.bufferToHostBuffer api b'
 
+bufferDimensions :: Buffer -> IO [Int64]
+bufferDimensions (Buffer b) =
+  withForeignPtr b $ \ b' ->
+    C.bufferDimensions api b'
 
 -- Event
 eventAwait :: Event -> IO ()

@@ -1,11 +1,11 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnliftedFFITypes #-}
-{-# LANGUAGE ViewPatterns #-}
 module HAX.PjRt.Buffer (
 --  bufferDestroy 
   bufferDestroy__ptr
 , bufferToHostBuffer
+, bufferDimensions
 ) where
 
 import HAX.PjRt.Plugin
@@ -32,3 +32,12 @@ bufferToHostBuffer api buffer = do
   MutableByteArray dst# <- newByteArray $ fromIntegral dstSize
   c__bufferToHostBuffer__eventAwait api buffer nullPtr dst# dstSize 
   unsafeFreezeByteArray (MutableByteArray dst#)
+
+foreign import ccall unsafe "buffer_dimensions"
+  c__bufferDimensions :: Ptr Api -> Ptr Buffer -> Ptr CSize -> IO (Ptr Int64)
+bufferDimensions :: Ptr Api -> Ptr Buffer -> IO [Int64]
+bufferDimensions api buffer = do 
+  alloca $ \ size -> do
+    dims <- c__bufferDimensions api buffer size 
+    _size <- peek size 
+    peekArray (fromIntegral _size) dims

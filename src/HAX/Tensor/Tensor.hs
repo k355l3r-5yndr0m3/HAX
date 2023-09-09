@@ -9,7 +9,7 @@ import Prelude hiding (lookup)
 import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
 
-import HAX.Jit
+import HAX.Jit hiding (jit)
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.HostBufferSemantics
@@ -20,6 +20,7 @@ import Control.Exception
 import Data.Proxy
 import Data.Kind
 import Data.Primitive
+import Data.Int
 
 import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.IsList
@@ -28,6 +29,9 @@ import MLIR
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
 newtype Tensor (s :: Shape) a = Tensor { getUnderlyingBuffer :: Buffer }
+debugTensorShape :: Tensor s t -> IO [Int64]
+debugTensorShape = bufferDimensions . getUnderlyingBuffer
+
 -- TODO: Consider removing the class Trace, it is currently doing nothing
 class Trace (t :: Shape -> Type -> Type) where
   auto :: forall s a. T s a => Tensor s a -> t s a
@@ -45,6 +49,8 @@ instance Trace Tracer where
           shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
 
 -- Pretty print tensor
+-- TODO: Fix, because this is just bad
+--       consider using bytestring
 instance (T s a, Show a, Prim a) => Show (Tensor s a) where
   show (Tensor b) = unsafePerformIO $ do
     hostbuff <- bufferToHostBuffer b
@@ -122,54 +128,42 @@ tensorNullity device = tensorFromHostBuffer device (primArrayFromList bufferData
 tensorSplat :: forall s t. T s t => Device -> t -> IO (Tensor s t)
 tensorSplat device a = tensorFromHostBuffer device (primArrayFromList $ replicate elemCount a)
   where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
-  
 
-type JitCacheTensor f = ([Buffer], LoadedExecutable, Annotated Int f)
-type JitTensor f = (Jit Tensor f, JitCacheTensor f ~ JitCache Tensor f)
-instance Jit Tensor (Proxy (Tracer s t)) where
-  type JitResult Tensor (Proxy (Tracer s t)) = Proxy (Tensor s t)
-  type JitCache  Tensor (Proxy (Tracer s t)) = JitCacheTensor (Proxy (Tracer s t))
-  
-  jit' _ = Proxy
-  jitInit _ = error "jitInit was not given a function"
+--instance {-# OVERLAPPABLE #-} T s t => Jit (Tracer s t) (Tensor s t) where
+--  jit' (Annotated args, (nout, program)) = unsafePerformIO $ do 
+--    outputs :: Annotated [Buffer] (Tensor s t) <- Annotated <$> loadedExecutableExecute1Await program args Nothing nout
+--    let (results, excess) = jitReify outputs 
+--    return $ assert (null excess) results
+--
+--  jitReify (Annotated (a:as)) = (Tensor a, as)
+--  jitReify (Annotated [])     = error "Program did not produced enough output"
+--
+--instance {-# OVERLAPPING #-} T s t => Jit (Tensor s t) (Tensor s t) where
+instance JitReify (Tensor s t) where
+  jitReify (Annotated (a:as)) = (Tensor a, as)
+  jitReify (Annotated [])     = error "Program did not produced enough outputs"
 
-  jitReify l = (Proxy, l)
+instance Jit (Tensor s t) where 
+  jit' (Annotated args, (nout, program)) = assert (null leftover) result
+    where outputs :: Annotated [Buffer] (Tensor s t) = Annotated . unsafePerformIO $ loadedExecutableExecute1Await program args Nothing nout
+          (result, leftover) = jitReify outputs
 
-instance T s t => Jit Tensor (Tracer s t) where
-  type JitResult Tensor (Tracer s t) = Tensor s t
-  type JitCache  Tensor (Tracer s t) = JitCacheTensor (Tracer s t)
+instance Jit f => Jit (Tensor s t -> f) where
+  jit' (Annotated args, prog) (Tensor b) = jit' (Annotated (args ++ [b]), prog)
 
-  jit' (argumentStack, executable, _) = assert (null excess) output
-    where (output, excess) = (jitReify . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing 1)
+type instance JitTransform (Tracer s t) = Tensor s t
 
-  jitInit _ = error "jitInit was not given a function"
+-- Implement a jit the convert from function of tracers to tensors 
+type family JitTracerTransform f
+type instance JitTracerTransform (Tensor s t) = Tracer s t
+type family JitTracer f where 
+  JitTracer (a ->  b) = JitTracerTransform a -> JitTracer b
+  JitTracer (a <+> b) = JitTracer a <+> JitTracer b
+  JitTracer a         = JitTracerTransform a
 
-  jitReify (a:as) = (Tensor a, as)
-  jitReify _      = error "Computation does not produce all demanded results"
-
-instance (JitTensor a, JitTensor b) => Jit Tensor (a <+> b) where
-  type JitResult Tensor (a <+> b) = JitResult Tensor a <+> JitResult Tensor b
-  type JitCache  Tensor (a <+> b) = JitCacheTensor (a <+> b)
-
-  jit' (argumentStack, executable, Annotated coarity) = assert (null excess) output
-    where (output, excess) = (jitReify . unsafePerformIO) (loadedExecutableExecute1Await executable argumentStack Nothing coarity)
-  
-  jitInit _ = error "jitInit was not given a function"
-  jitReify r0 = (a :+: b, r2)
-    where (a, r1) = jitReify r0
-          (b, r2) = jitReify r1
-  
-
-instance (T s t, JitTensor f) => Jit Tensor (Tracer s t -> f) where
-  type JitResult Tensor (Tracer s t -> f) = Tensor s t -> JitResult Tensor f
-  type JitCache  Tensor (Tracer s t -> f) = JitCacheTensor (Tracer s t -> f)
-
-  jit' (argumentStack, executable, Annotated coarity) t = jit' (argumentStack++[getUnderlyingBuffer t], executable, Annotated coarity)
-
-  jitInit f = ([], executable, Annotated coarity)
-    where (coarity, executable) = unsafePerformIO $ compile f
-
-  jitReify = error "Should not be possible"
+jit :: forall a b f f'. (f ~ (a -> b), Traceable f, f' ~ JitResult f, Jit f', f ~ JitTracer f') => f -> f'
+jit f = jit' jitData
+  where jitData = (Annotated [] :: Annotated [Buffer] f', ) . unsafePerformIO $ compile f
 
 instance (T s t, Num t) => Num (Tensor s t) where
   (+) = jit (+)
@@ -180,13 +174,13 @@ instance (T s t, Num t) => Num (Tensor s t) where
   abs    = jit abs
   negate = jit negate
 
-  fromInteger = error "This is problematic"
+  fromInteger = unsafePerformIO . tensorSplat defaultDevice . fromIntegral
 
 instance (KnownShape s, Tensorial t, Fractional t) => Fractional (Tensor s t) where
   (/) = jit (/)
   recip = jit recip
 
-  fromRational = error "This is problematic"
+  fromRational = unsafePerformIO . tensorSplat defaultDevice . fromRational
 
 instance Tensorial t => TensorOp Tensor t where
   unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand

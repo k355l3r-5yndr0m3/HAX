@@ -6,11 +6,14 @@
 module HAX.Target where
 import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
+import HAX.Tensor.Tensor
 
 import HAX.AD.Gradient
 import HAX.AD.Reverse
 import HAX.AD
 
+
+import HAX.Jit
 import HAX.Utils
 
 import Control.Exception
@@ -247,3 +250,5 @@ instance (ReverseMode (a -> f), Cotangent (r s t)) => ReverseMode (Target (Rever
   type GradResult (Target (Reverse r) s t -> a -> f) = Target r s t <+> GradResult (a -> f)
   rgrad' (g, i) f (Target dim t) = assert (null dim) $ rgrad' (g, i + 1) (f $ Target [] $ Reverse (t, independent i))
   rgradReify (Annotated idx) (reifyGrad idx -> (g, g')) = Target [] g :+: rgradReify (Annotated (idx + 1) :: Annotated CIntPtr (a -> f)) g'
+
+type instance JitTransform (Target r s t) = Tensor s t
