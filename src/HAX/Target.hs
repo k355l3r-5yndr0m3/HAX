@@ -4,7 +4,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
 module HAX.Target where
-import HAX.Tensor.Tracer
+-- import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
 import HAX.Tensor.Tensor
 
@@ -23,7 +23,7 @@ import Data.Proxy
 import Data.List
 import Data.Functor
 import Data.Bifunctor
-import Data.IntMap.Strict hiding (null, map)
+-- import Data.IntMap.Strict hiding (null, map)
 
 import MLIR
 import Stablehlo.Dialect.Stablehlo.Attributes
@@ -138,6 +138,7 @@ instance (T s t, forall s'. KnownShape s' => Fractional (r s' t), TensorOp r t, 
 
 
 instance (Tensorial t, TensorOp r t, Transformable r t) => TensorOp (Target r) t where
+  -- NOTE: haskell cannot determine the write method to call so this is a fix
   unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeBroadcast (Target dim operand) _map = Target dim $ 
     reifyShape (dim ++ shapeVal (Proxy :: Proxy s0)) $ \ s0' -> 
@@ -150,18 +151,32 @@ instance (Tensorial t, TensorOp r t, Transformable r t) => TensorOp (Target r) t
                 t1 :: r s1' t = unsafeBroadcast t0 _map' 
             in  coerce $! t1
 
-  unsafeReduce :: forall s0 s1. (T s0 t, T s1 t) => Target r s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> Target r s1 t
-  unsafeReduce (Target dims operand) body initvalue redims = Target dims $ 
+  unsafeReduceAdd :: forall s0 s1. (T s0 t, T s1 t, Num t) => Target r s0 t -> [Integer] -> Target r s1 t
+  unsafeReduceAdd (Target dims operand) axies = Target dims $ 
     reifyShape s0 $ \ s0' -> reifyShape s1 $ \ s1' -> 
       result s0' s1'
-    where redims' = fmap (+ (fromIntegral $ length dims)) redims
+    where axies' = fmap (+ (fromIntegral $ length dims)) axies
           s0 = dims ++ shapeVal (Proxy :: Proxy s0)
           s1 = dims ++ shapeVal (Proxy :: Proxy s1)
           result :: forall s0' s1'. (KnownShape s0', KnownShape s1') => Proxy s0' -> Proxy s1' -> r s1 t
           result _ _ = 
             let t0 :: r s0' t = coerce operand
-                t1 :: r s1' t = unsafeReduce t0 body initvalue redims'
+                t1 :: r s1' t = unsafeReduceAdd t0 axies'
             in  coerce $! t1
+
+  unsafeReduceMul :: forall s0 s1. (T s0 t, T s1 t, Num t) => Target r s0 t -> [Integer] -> Target r s1 t
+  unsafeReduceMul (Target dims operand) axies = Target dims $ 
+    reifyShape s0 $ \ s0' -> reifyShape s1 $ \ s1' -> 
+      result s0' s1'
+    where axies' = fmap (+ (fromIntegral $ length dims)) axies
+          s0 = dims ++ shapeVal (Proxy :: Proxy s0)
+          s1 = dims ++ shapeVal (Proxy :: Proxy s1)
+          result :: forall s0' s1'. (KnownShape s0', KnownShape s1') => Proxy s0' -> Proxy s1' -> r s1 t
+          result _ _ = 
+            let t0 :: r s0' t = coerce operand
+                t1 :: r s1' t = unsafeReduceMul t0 axies'
+            in  coerce $! t1
+
 
   unsafeDotGeneral :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 t -> DotDimensionNumbersAttr -> Target r s2 t
   unsafeDotGeneral lhs rhs attr = Target dims $ 
@@ -226,15 +241,17 @@ vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b)
 vmap f = vmap' [] (const f)
 
 
-instance T s t => Traceable (Target Tracer s t) where
-  trace' i (Target d u) = reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
-          result _ = trace' i $! (coerce u :: Tracer s' t)
 
-instance (T s t, Traceable f) => Traceable (Target Tracer s t -> f) where
-  trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
-    where argn = Target [] $ Tracer (\ a -> (a, ) <$> blockArg i)
-          _type = tensorType' (Proxy :: Proxy (Tracer s t))
+instance (T s t, TraceableElement (r s t), Transformable r t) => TraceableElement (Target r s t) where
+  constructTracer i = (i', Target [] t, tt)
+    where (i', t, tt) = constructTracer i
+  
+  deconstructTracer (Target [] t) = 
+    deconstructTracer t
+  deconstructTracer _ = error "deconstructTracer received an invalid target."
+
+
+
 
 
 -- currently, this is not possible `vmap (rgrad f)` but this should be possible `rgrad (vmap f)` which should be identical

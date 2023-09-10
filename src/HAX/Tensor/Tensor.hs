@@ -168,9 +168,9 @@ instance (KnownShape s, Tensorial t, Fractional t) => Fractional (Tensor s t) wh
 
 instance Tensorial t => TensorOp Tensor t where
   unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand
-  unsafeReduce operand body initvalue redims = jit (\ _operand -> unsafeReduce _operand body initvalue redims) operand
   unsafeDotGeneral lhs rhs attr = jit (\ _lhs _rhs -> unsafeDotGeneral _lhs _rhs attr) lhs rhs
   unsafeTranspose operand perm = jit (`unsafeTranspose` perm) operand
 
   splat a = unsafePerformIO $ tensorSplat defaultDevice a
-
+  unsafeReduceAdd operand axies = jit (`unsafeReduceAdd` axies) operand
+  unsafeReduceMul operand axies = jit (`unsafeReduceMul` axies) operand

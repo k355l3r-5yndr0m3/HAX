@@ -18,6 +18,7 @@ import Data.Proxy
 import Data.Reflection
 import Data.Primitive
 import Data.Int
+import Data.Bifunctor
 
 import Foreign hiding (sizeOf)
 import Foreign.C (CIntPtr)
@@ -169,13 +170,13 @@ type family NotFunction f :: Constraint where
   NotFunction _        = ()
 
 class NotFunction t => TraceableElement t where -- Undecidable super class extension because of this
-  constructTracer   :: NotFunction t => CIntPtr -> (CIntPtr, t)
+  constructTracer   :: NotFunction t => CIntPtr -> (CIntPtr, t, [AnyType])
   deconstructTracer :: NotFunction t => t -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
 
 instance (TraceableElement a, TraceableElement b) => TraceableElement (a <+> b) where
-  constructTracer i0 = (i2, a :+: b)
-    where (i1, a) = constructTracer i0
-          (i2, b) = constructTracer i1
+  constructTracer i0 = (i2, a :+: b, at ++ bt)
+    where (i1, a, at) = constructTracer i0
+          (i2, b, bt) = constructTracer i1
   deconstructTracer (a :+: b) = (\ t0 -> do 
     (t1, _a) <- a' t0
     (t2, _b) <- b' t1
@@ -186,32 +187,35 @@ instance (TraceableElement a, TraceableElement b) => TraceableElement (a <+> b) 
           join (_a, _b) (_c, _d) = (_a ++ _c, _b ++ _d)
 
 instance TraceableElement (Proxy a) where 
-  constructTracer     = (, Proxy)
+  constructTracer     = (, Proxy, [])
   deconstructTracer _ = (\ t -> return (t, []), ([], []))
+
+instance (TraceableElement a0, TraceableElement a1) => 
+  TraceableElement (a0, a1) where
+  constructTracer i0 = (i2, (t0, t1), k0 ++ k1)
+    where (i1, t0, k0) = constructTracer i0
+          (i2, t1, k1) = constructTracer i1
+  deconstructTracer (a0, a1) = (\ t0 -> do 
+    (t1, _a0) <- a0' t0
+    (t2, _a1) <- a1' t1
+    return (t2, _a0 ++ _a1), join a0Sig a1Sig)
+    where join :: ([AnyType], [AnyType]) -> ([AnyType], [AnyType]) -> ([AnyType], [AnyType])
+          join (_a, _b) (_c, _d) = (_a ++ _c, _b ++ _d)
+          (a0', a0Sig) = deconstructTracer a0
+          (a1', a1Sig) = deconstructTracer a1
+
 
 -- NOTE: What the performance difference between IntMap Value being outside/inside tuple
 class Traceable f where
   trace' :: CIntPtr -> f -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
 
 -- Note since a <+> is a tree, care must be apply when traverse it so flatteninng and inflatting can be consistent
-instance TraceableElement t => Traceable t where
+instance {-# OVERLAPPABLE #-} TraceableElement t => Traceable t where
   trace' _ = deconstructTracer
 
-instance (TraceableElement t, Traceable f) => Traceable (t -> f) where
-  trace' i f = trace' i' (f t)
-    where (i', t) = constructTracer i
--- instance (Traceable a, Traceable b) => Traceable (a <+> b) where
---   trace' _ (a :+: b) = (\ t0 -> do 
---     (t1, _lhs) <- fst lhs t0 
---     (t2, _rhs) <- fst rhs t1 
---     return (t2, _lhs ++ _rhs), join (snd lhs) (snd rhs))
---     where lhs = trace' errmsg a
---           rhs = trace' errmsg b
---           join :: ([AnyType], [AnyType]) -> ([AnyType], [AnyType]) -> ([AnyType], [AnyType])
---           join (_a, _b) (_c, _d) = (_a ++ _c, _b ++ _d)
---           errmsg = error "the traced function is not regular"
--- instance Traceable (Proxy a) where
---   trace' _ _ = (\ tbl -> return (tbl, []), ([], []))
+instance {-# OVERLAPPING #-} (TraceableElement t, Traceable f) => Traceable (t -> f) where
+  trace' i f = second (first (tt++)) $ trace' i' (f t)
+    where (i', t, tt) = constructTracer i
 
 trace :: Traceable (a -> b) => (a -> b) -> (BlockM [Value], ([AnyType], [AnyType]))
 trace f = (fmap snd (_fst empty), _snd)
@@ -244,20 +248,19 @@ tensorType' = toAnyType . tensorType
 
 -- TODO: Move this class to another module, this module is a little too big already
 class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
+--  {-# MINIMAL unsafeBroadcast, unsafeDotGeneral, unsafeTranspose, (unsafeReduce | (unsafeReduceAdd, unsafeReduceMul)), splat #-}
   -- without type checking, internal use only
   -- it is easy to detach type from reality
   unsafeBroadcast  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
   -- NOTE unsafeReduce by itself cannot be differentiated, use the other version instead
-  unsafeReduce     :: (KnownShape s0, KnownShape s1) => a s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> a s1 t
+
   unsafeDotGeneral :: (KnownShape s0, KnownShape s1, KnownShape s2) => a s0 t -> a s1 t -> DotDimensionNumbersAttr -> a s2 t
   unsafeTranspose  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
 
 
   unsafeReduceAdd :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
-  unsafeReduceAdd operand = unsafeReduce operand SHLO._AddOp 0
 
   unsafeReduceMul :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
-  unsafeReduceMul operand = unsafeReduce operand SHLO._MulOp 1
 
 
   -- Type checked
@@ -273,11 +276,17 @@ class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
   transpose :: Transpose operand perm result => a operand t -> Proxy perm -> a result t
   transpose operand = unsafeTranspose operand . shapeVal
 
-  reduceAdd :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
-  reduceAdd operand = unsafeReduceAdd operand . shapeVal
+  sigma :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
+  sigma operand = unsafeReduceAdd operand . shapeVal
 
-  reduceMul :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
-  reduceMul operand = unsafeReduceMul operand . shapeVal
+  sigma' :: forall s. (T s t, Num t) => a s t -> a '[] t
+  sigma' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
+
+  pi :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
+  pi operand = unsafeReduceMul operand . shapeVal
+
+  pi' :: forall s. (T s t, Num t) => a s t -> a '[] t
+  pi' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
   
   -- TODO: Implement + - * / etc with automatic broadcasting
   prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
@@ -289,6 +298,8 @@ class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
     where attr = DotDimensionNumbersAttr { getContractingDims = [(1, 0)], getBatchingDims = [] }
 
   splat :: KnownShape s => t -> a s t
+
+
 
 
 (|#|) :: (TensorOp a t, TensorProductConstraint l r p) => a l t -> a r t -> a p t

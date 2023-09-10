@@ -1,9 +1,9 @@
-{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE DataKinds #-}
 module Main where
 import HAX.Target
 import HAX.Tensor
 import HAX.Jit
+import HAX.Utils
 
 import HAX.AD.Reverse
 import HAX.AD
@@ -14,30 +14,32 @@ import Control.Monad
 import System.Random
 import System.Random.Stateful
 
-type Te = Target (Reverse Tracer)
+type Tar = Target (Reverse Tracer)
 
-test1 :: Te [5, 5] Float -> Te [5, 5] Float
-test1 = negate
+grad f = (jit f, jit $ rgrad f)
 
-grad1 = jit $ rgrad test1
+test1 :: Tar [5, 5] Float -> Tar [5, 5] Float -> Tar '[] Float 
+test1 x1 x2 = sigma' $ x1 + x2 / x1
 
-test2 :: Te [2, 8] Float -> Te [2, 8] Float -> Te [2, 8] Float
-test2 = (+)
+(forw1, grad1) = grad test1
 
-grad2 = jit $ rgrad test2
 
-test3 :: Te [6, 2] Float -> Te [2, 4] Float -> Te [6, 4] Float 
-test3 = matmul
 
-grad3 = jit $ rgrad test3
+
 
 main :: IO ()
 main = do
-  _ <- runStateGenT (mkStdGen 53) $ \ g -> do 
-    t1_1 :: Tensor [5, 5] Float   <- tensorUniformRM (-1, 1) g
-    d1_1 :: [Tensor [5, 5] Float] <- replicateM 8 (tensorUniformRM (-1, 1) g)
-
-    undefined
-
-  putStrLn "Hello, world!"
+  print . fst =<< runStateGenT (mkStdGen 3134) (\ g -> do 
+    center    :: (Tensor [5, 5] Float, Tensor [5, 5] Float) <- (,) <$> tensorUniformRM (-1, 1) g <*> tensorUniformRM (-1, 1) g
+    deviation ::[(Tensor [5, 5] Float, Tensor [5, 5] Float)]<- replicateM 16 $ (,) <$> tensorUniformRM (-1, 1) g <*> tensorUniformRM (-1, 1) g
+    let forward  = uncurry forw1 center
+        gradient = uncurry grad1 center
+        graderr  = 
+          let (x0, x1) = center
+          in  [ let dy' = forw1 (x0 + dx0) (x1 + dx1) - forward 
+                    dy = 
+                      let (dy_dx0 :+: dy_dx1) = gradient * (dx0 :+: dx1)
+                      in  sigma' dy_dx0 + sigma' dy_dx1
+                in  dy' - dy | (dx0, dx1) <- deviation ]
+    return graderr)
 

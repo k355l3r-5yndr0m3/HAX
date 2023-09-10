@@ -3,17 +3,14 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE ViewPatterns #-}
 module HAX.AD.Reverse where
-import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
 
 import HAX.AD.Gradient
 
 import Data.Proxy
 import Data.List
-import Data.Bifunctor
 
 import Stablehlo.Dialect.Stablehlo.Attributes
-import MLIR
 
 newtype Reverse r s t = Reverse (r s t, r s t -> Gradient)
 primal :: Reverse r s t -> r s t 
@@ -58,8 +55,6 @@ instance Fractional (r s t) => Fractional (Reverse r s t) where
 
 
 instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s t)) => TensorOp (Reverse r) t where
-  unsafeReduce = error "unsafeReduce is not directly differentiable, use reduceAdd or reduceSum instead"  
-
   -- TODO: Find a more elegant way
   unsafeDotGeneral :: forall s0 s1 s2. (KnownShape s0, KnownShape s1, KnownShape s2) => Reverse r s0 t -> Reverse r s1 t -> DotDimensionNumbersAttr -> Reverse r s2 t
   unsafeDotGeneral (Reverse (f, f')) (Reverse (g, g')) attr = 
@@ -162,12 +157,12 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
       in  f' (unsafeBroadcast (i * g) _map / f))
     where g = unsafeReduceMul f dims
 
--- instance T s t => Traceable (Reverse Tracer s t) where
---   trace' _ (primal -> u) = (fmap (fmap singleton) . sharing' u, ([], [_type]))
---     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
--- 
--- instance (T s t, Traceable f) => Traceable (Reverse Tracer s t -> f) where 
---   trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
---     where argn = Reverse (Tracer (\ a -> (a, ) <$> blockArg i), undefined)
---           _type = tensorType' (Proxy :: Proxy (Tracer s t))
--- 
+
+
+
+
+instance (T s t, TraceableElement (r s t)) => TraceableElement (Reverse r s t) where
+  constructTracer i = (i', Reverse (t, undefined), tt)
+    where (i', t, tt) = constructTracer i
+
+  deconstructTracer = deconstructTracer . primal

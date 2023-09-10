@@ -7,15 +7,11 @@ import Prelude hiding (lookup)
 
 import HAX.Tensor.Tensorial
 
-import HAX.Utils
-import HAX.Jit
-
 import Control.Exception
 
 import Data.IntMap.Strict hiding (singleton, null, map, foldl)
 import Data.List (singleton)
 import Data.Proxy
-import Data.Bifunctor
 import Foreign
 
 import GHC.StableName
@@ -118,15 +114,12 @@ instance (T s t, Fractional t) => Fractional (Tracer s t) where
           a :: t     = fromRational literal
 
 instance T s t => TraceableElement (Tracer s t) where
+  constructTracer i = (i + 1, Tracer $ \ a -> (a, ) <$> blockArg i, [_type])
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
--- instance T s t => Traceable (Tracer s t) where
---   trace' _ u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
---     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
--- 
--- instance (T s t, Traceable f) => Traceable (Tracer s t -> f) where 
---   trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
---     where argn = Tracer (\ a -> (a, ) <$> blockArg i)
---           _type = tensorType' (Proxy :: Proxy (Tracer s t))
+  deconstructTracer u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
 
 newtype BroadcastMap = BroadcastMap [Word64]
 getBroadcastMap :: KnownShape s => Proxy s -> BroadcastMap
@@ -164,7 +157,29 @@ instance AttrGet TransposePerm where
 instance DenseIntOrFPElementsAttr TransposePerm
 instance DenseIntElementsAttr TransposePerm
 
+unsafeReduceTracer :: forall s0 s1 t. (T s0 t, T s1 t) => Tracer s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> Tracer s1 t
+unsafeReduceTracer operand body (splat -> initvalue :: Tracer '[] t) dims = mkTracer $ do 
+  _operand   <- sharing operand
+  _initvalue <- sharing initvalue
+  retval $ head <$> SHLO._ReduceOp _dims [_operand, _initvalue] (do 
+    bb0 <- blockGet [scalar, scalar]
+    blockDef bb0 $ do 
+      _arg0 <- blockArg 0 
+      _arg1 <- blockArg 1 
+      _out  <- body _arg0 _arg1 scalar 
+      SHLO._ReturnOp [_out]) [_type]
+  where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+        _dims = ReduceDims (fromInteger <$> dims)
+        scalar = tensorType' (Proxy :: Proxy (Tracer '[] t))
+
 instance Tensorial t => TensorOp Tracer t where
+  sigma operand = unsafeReduceAdd operand . shapeVal
+  sigma' :: forall s. (T s t, Num t) => Tracer s t -> Tracer '[] t
+  sigma' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
+  pi operand = unsafeReduceMul operand . shapeVal
+  pi' :: forall s. (T s t, Num t) => Tracer s t -> Tracer '[] t
+  pi' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
+
   unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeBroadcast operand idxmap@(BroadcastMap . fmap fromInteger -> _map) = 
     assert correctness $ mkTracer $ do 
@@ -180,21 +195,8 @@ instance Tensorial t => TensorOp Tracer t where
             in  isUnique idxmap && src == fmap (dst !!) (fromInteger <$> idxmap)
           _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
 
-  -- TODO: Add runtime checking
-  unsafeReduce :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> (Value -> Value -> AnyType -> BlockM Value) -> t -> [Integer] -> Tracer s1 t
-  unsafeReduce operand body (splat -> initvalue :: Tracer '[] t) dims = mkTracer $ do 
-    _operand   <- sharing operand
-    _initvalue <- sharing initvalue
-    retval $ head <$> SHLO._ReduceOp _dims [_operand, _initvalue] (do 
-      bb0 <- blockGet [scalar, scalar]
-      blockDef bb0 $ do 
-        _arg0 <- blockArg 0 
-        _arg1 <- blockArg 1 
-        _out  <- body _arg0 _arg1 scalar 
-        SHLO._ReturnOp [_out]) [_type]
-    where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
-          _dims = ReduceDims (fromInteger <$> dims)
-          scalar = tensorType' (Proxy :: Proxy (Tracer '[] t))
+  unsafeReduceAdd operand = unsafeReduceTracer operand SHLO._AddOp 0
+  unsafeReduceMul operand = unsafeReduceTracer operand SHLO._MulOp 1
 
   unsafeDotGeneral :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 t -> DotDimensionNumbersAttr -> Tracer s2 t
   unsafeDotGeneral lhs rhs attr = mkTracer $ do 

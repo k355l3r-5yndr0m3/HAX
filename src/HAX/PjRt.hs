@@ -11,13 +11,17 @@ import qualified HAX.PjRt.Event            as C
 import qualified HAX.PjRt.LoadedExecutable as C
 import qualified HAX.PjRt.Buffer           as C
 
-import GHC.IO.Unsafe (unsafePerformIO)
-import Foreign
-import MLIR.IR (ByteCode)
 import Control.Monad (forM)
+
 import Data.Unique
 import Data.Primitive
 
+import Debug.Trace
+
+import Foreign
+
+import MLIR.IR (ByteCode)
+import GHC.IO.Unsafe (unsafePerformIO)
 import Paths_HAX
 
 -- Global singleton
@@ -60,7 +64,7 @@ clientPlatformName (Client c) = C.clientPlatformName api c
 clientCompile :: Client -> ByteCode -> IO LoadedExecutable
 clientCompile (Client c) bytecode = do
   i <- newUnique
-  putStrLn $ "Compiling " ++ show (hashUnique i) -- Tibit of code to check for recompilation, debugging only
+  traceIO $ "Compiling " ++ show (hashUnique i) -- Tibit of code to check for recompilation, debugging only
   executable <- newForeignPtrEnv C.loadedExecutableDestroy__ptr api =<< C.clientCompile api c bytecode 
   return $ LoadedExecutable executable
 
