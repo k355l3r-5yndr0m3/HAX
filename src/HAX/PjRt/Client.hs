@@ -11,6 +11,7 @@ module HAX.PjRt.Client (
 , clientCompile
 , clientAddressableDevices
 , clientBufferFromHostBuffer
+, clientBufferFromHostBufferGC
 ) where
 import HAX.PjRt.Plugin
 import HAX.PjRt.HostBufferSemantics (HostBufferSemantics(..))
@@ -70,6 +71,14 @@ clientAddressableDevices api client = alloca $ \numPtr -> do
   num     <- peek numPtr 
   peekArray (fromIntegral num) devices
 
+withShapeInfo :: ShapeInfo -> ((Ptr Int64, CSize) -> (Ptr Int64, CSize) -> IO b) -> IO b
+withShapeInfo (Shape shape) f = 
+  withArrayLen shape $ \ (fromIntegral -> numDims) dims -> 
+    f (dims, numDims) (nullPtr, 0)
+withShapeInfo (ShapeAndByteStrides (unzip -> (shape, bytestrides))) f = 
+  withArrayLen shape $ \ (fromIntegral -> numDims) dims -> 
+    withArray bytestrides $ \ bytestridesPtr -> 
+      f (dims, numDims) (bytestridesPtr, numDims)
 
 foreign import ccall unsafe "client_buffer_from_host_buffer"
   c__clientBufferFromHostBuffer :: Ptr Api -> Ptr Client -> 
@@ -85,11 +94,12 @@ clientBufferFromHostBuffer api client (ByteArray hostBuffer#) bufferType shapeIn
     deviceBuffer       <- c__clientBufferFromHostBuffer api client hostBuffer# bufferType dims numDims bytestrides numBytestrides hostBufferSematics device nullPtr eventPtr 
     doneWithHostBuffer <- peek eventPtr
     return (doneWithHostBuffer, deviceBuffer)
-  where withShapeInfo :: ShapeInfo -> ((Ptr Int64, CSize) -> (Ptr Int64, CSize) -> IO b) -> IO b
-        withShapeInfo (Shape shape) f = 
-          withArrayLen shape $ \ (fromIntegral -> numDims) dims -> 
-            f (dims, numDims) (nullPtr, 0)
-        withShapeInfo (ShapeAndByteStrides (unzip -> (shape, bytestrides))) f = 
-          withArrayLen shape $ \ (fromIntegral -> numDims) dims -> 
-            withArray bytestrides $ \ bytestridesPtr -> 
-              f (dims, numDims) (bytestridesPtr, numDims)
+
+-- The memory given must be allocated by malloc and must not be managed by haskell garbage collector
+foreign import ccall unsafe "client_buffer_from_host_buffer__gc"
+  c__clientBufferFromHostBuffer__gc :: Ptr Api -> Ptr Client -> Ptr a -> BufferType -> Ptr Int64 -> CSize -> Ptr Int64 -> CSize -> Ptr Device -> Ptr MemoryLayout -> IO (Ptr Buffer)
+clientBufferFromHostBufferGC :: Ptr Api -> Ptr Client -> Ptr a -> BufferType -> ShapeInfo -> Ptr Device -> Ptr MemoryLayout -> IO (Ptr Buffer)
+clientBufferFromHostBufferGC api client content bufferType shapeInfo device memLayout =  
+  withShapeInfo shapeInfo $ \ (dims, numDims) (bytestrides, numBytestrides) ->
+    c__clientBufferFromHostBuffer__gc api client content bufferType dims numDims bytestrides numBytestrides device memLayout
+

@@ -9,6 +9,9 @@ import HAX.AD
 import HAX.AD.Reverse
 import HAX.Target
 import HAX.Jit
+import HAX.AD.Numerical
+
+import System.Random
 
 import Data.Proxy
 
@@ -145,6 +148,12 @@ main = do
 
   let e = jit test10
   print $ e 1
+
+  print (onehot :: [Tensor '[5, 5] Float])
+
+
+
+
 
   clientDestroy client
   return ()

@@ -1,15 +1,19 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE ViewPatterns #-}
 module HAX.AD.Reverse where
+import HAX.Tensor.Tracer
+import HAX.Tensor.Tensorial
 
 import HAX.AD.Gradient
-import HAX.Tensor.Tensorial
 
 import Data.Proxy
 import Data.List
+import Data.Bifunctor
 
 import Stablehlo.Dialect.Stablehlo.Attributes
+import MLIR
 
 newtype Reverse r s t = Reverse (r s t, r s t -> Gradient)
 primal :: Reverse r s t -> r s t 
@@ -157,3 +161,13 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
             in  generator (0, dims, shapeRank (Proxy :: Proxy s0) - 1)
       in  f' (unsafeBroadcast (i * g) _map / f))
     where g = unsafeReduceMul f dims
+
+-- instance T s t => Traceable (Reverse Tracer s t) where
+--   trace' _ (primal -> u) = (fmap (fmap singleton) . sharing' u, ([], [_type]))
+--     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+-- 
+-- instance (T s t, Traceable f) => Traceable (Reverse Tracer s t -> f) where 
+--   trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
+--     where argn = Reverse (Tracer (\ a -> (a, ) <$> blockArg i), undefined)
+--           _type = tensorType' (Proxy :: Proxy (Tracer s t))
+-- 

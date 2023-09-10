@@ -2,7 +2,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
-{-# LANGUAGE MagicHash #-}
 module HAX.Tensor.Tensor where
 import Prelude hiding (lookup)
 
@@ -12,15 +11,16 @@ import HAX.Tensor.Tensorial
 import HAX.Jit hiding (jit)
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
-import HAX.PjRt.HostBufferSemantics
 import HAX.Utils
 
 import Control.Exception
 
 import Data.Proxy
 import Data.Kind
-import Data.Primitive
+import Data.Primitive hiding (newArray)
 import Data.Int
+
+import Foreign
 
 import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.IsList
@@ -64,12 +64,13 @@ instance (T s a, Show a, Prim a) => Show (Tensor s a) where
             in  (show a ++ s, offs - 1)
           formater offs ((idx, ext):ies) buf s
             | idx == 0  =
-              let (s', offs') = formater offs ies buf (',':s)
+              let (s', offs') = formater offs ies buf ((if idx == ext then ']' else ','):s)
               in  ('[':s', offs')
             | otherwise = 
               let c = if idx == ext then ']' else ','
                   (s', offs') = formater offs ies buf (c:s)
               in  formater offs' ((idx - 1, ext):ies) buf s'
+
 
 
 resizeList :: Int -> a -> [a] -> [a]
@@ -104,41 +105,24 @@ instance (T (a ': as ': ass) t, ListToTensor (as ': ass) t) => ListToTensor (a '
 
 instance ListToTensor s t => IsList (Tensor s t) where
   type Item (Tensor s t) = Padding s t
-  fromList l = unsafePerformIO $ tensorFromHostBuffer defaultDevice l'
+  fromList l = unsafePerformIO $ tensorFromHostBufferGC defaultDevice =<< l'
     where p = Proxy :: Proxy s
-          l' = primArrayFromList $ flatten p $ regularize p (nullElement :: t) l
+          l' = newArray $ flatten p $ regularize p (nullElement :: t) l
   toList = error "TODO: Implement"
 
-tensorFromHostBuffer :: forall s a. (KnownShape s, Tensorial a) => Device -> PrimArray a -> IO (Tensor s a)
-tensorFromHostBuffer device (PrimArray buffer#) = Tensor <$> do 
-  (e, b) <- clientBufferFromHostBuffer client (ByteArray buffer#) (pjrtBufferType p) (Shape shape) kImmutableOnlyDuringCall device
-  eventAwait e
-  return b
-  where p = Proxy :: Proxy a
+tensorFromHostBufferGC :: forall s t. T s t => Device -> Ptr t -> IO (Tensor s t)
+tensorFromHostBufferGC device hostBuffer = Tensor <$>
+  clientBufferFromHostBufferGC client hostBuffer (pjrtBufferType p) (Shape shape) device
+  where p :: Proxy t = Proxy
         shape = fromIntegral <$> shapeVal (Proxy :: Proxy s)
 
-tensorUnity :: forall s t. T s t => Device -> IO (Tensor s t)
-tensorUnity device = tensorFromHostBuffer device (primArrayFromList bufferData)
-  where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) unitElement
-        
-tensorNullity :: forall s t. T s t => Device -> IO (Tensor s t)
-tensorNullity device = tensorFromHostBuffer device (primArrayFromList bufferData)
-  where bufferData = replicate (fromIntegral $ product $ shapeVal (Proxy :: Proxy s)) nullElement
-
 tensorSplat :: forall s t. T s t => Device -> t -> IO (Tensor s t)
-tensorSplat device a = tensorFromHostBuffer device (primArrayFromList $ replicate elemCount a)
+tensorSplat device a = do
+  content <- mallocArray elemCount
+  sequence_ [pokeElemOff content i a | i <- [0..elemCount - 1]]
+  tensorFromHostBufferGC device content
   where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
 
---instance {-# OVERLAPPABLE #-} T s t => Jit (Tracer s t) (Tensor s t) where
---  jit' (Annotated args, (nout, program)) = unsafePerformIO $ do 
---    outputs :: Annotated [Buffer] (Tensor s t) <- Annotated <$> loadedExecutableExecute1Await program args Nothing nout
---    let (results, excess) = jitReify outputs 
---    return $ assert (null excess) results
---
---  jitReify (Annotated (a:as)) = (Tensor a, as)
---  jitReify (Annotated [])     = error "Program did not produced enough output"
---
---instance {-# OVERLAPPING #-} T s t => Jit (Tensor s t) (Tensor s t) where
 instance JitReify (Tensor s t) where
   jitReify (Annotated (a:as)) = (Tensor a, as)
   jitReify (Annotated [])     = error "Program did not produced enough outputs"

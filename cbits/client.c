@@ -114,12 +114,11 @@ void free_host_buffer_callback(PJRT_Error *error, void *user_arg) {
     free(arg->data);
     free(arg);
 }
-PJRT_Buffer *client_buffer_from_host_buffer__autofree(PJRT_Api *api, PJRT_Client *client, 
-                                                      void *data, int32_t type,
-                                                      const int64_t *dims, size_t num_dims,
-                                                      const int64_t* byte_strides, size_t num_byte_strides,
-                                                      int32_t host_buffer_semantics, PJRT_Device *device,
-                                                      PJRT_Buffer_MemoryLayout *device_layout) {
+PJRT_Buffer *client_buffer_from_host_buffer__gc(PJRT_Api *api, PJRT_Client *client, 
+                                                void *data, int32_t type,
+                                                const int64_t *dims, size_t num_dims,
+                                                const int64_t* byte_strides, size_t num_byte_strides,
+                                                PJRT_Device *device, PJRT_Buffer_MemoryLayout *device_layout) {
     assert(device_layout == NULL); // TODO: Support device layout, this is tricky because I don't quite understand tiled
     ASSERT_ENUM_EQUIVALENT(PJRT_Buffer_Type, int32_t);
     ASSERT_ENUM_EQUIVALENT(PJRT_HostBufferSemantics, int32_t);
@@ -128,7 +127,7 @@ PJRT_Buffer *client_buffer_from_host_buffer__autofree(PJRT_Api *api, PJRT_Client
                                    .type = type, .dims = dims,
                                    .num_dims = num_dims, .byte_strides = byte_strides,
                                    .num_byte_strides = num_byte_strides,
-                                   .host_buffer_semantics = host_buffer_semantics,
+                                   .host_buffer_semantics = PJRT_HostBufferSemantics_kZeroCopy,
                                    .device = device, .device_layout = device_layout);
     free_host_buffer_callback_arg *arg = malloc(sizeof(free_host_buffer_callback_arg));
     *arg = (free_host_buffer_callback_arg){ .api = api, .readied = result.done_with_host_buffer, .data = data };

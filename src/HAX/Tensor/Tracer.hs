@@ -117,14 +117,16 @@ instance (T s t, Fractional t) => Fractional (Tracer s t) where
           shape      = fromIntegral <$> shapeVal (Proxy :: Proxy s)
           a :: t     = fromRational literal
 
-instance T s t => Traceable (Tracer s t) where
-  trace' _ u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+instance T s t => TraceableElement (Tracer s t) where
 
-instance (T s t, Traceable f) => Traceable (Tracer s t -> f) where 
-  trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
-    where argn = Tracer (\ a -> (a, ) <$> blockArg i)
-          _type = tensorType' (Proxy :: Proxy (Tracer s t))
+-- instance T s t => Traceable (Tracer s t) where
+--   trace' _ u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
+--     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+-- 
+-- instance (T s t, Traceable f) => Traceable (Tracer s t -> f) where 
+--   trace' i f = first (_type :) <$> trace' (i + 1) (f argn)
+--     where argn = Tracer (\ a -> (a, ) <$> blockArg i)
+--           _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 newtype BroadcastMap = BroadcastMap [Word64]
 getBroadcastMap :: KnownShape s => Proxy s -> BroadcastMap

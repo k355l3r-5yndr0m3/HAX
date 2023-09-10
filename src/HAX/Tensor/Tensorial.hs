@@ -5,6 +5,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
 module HAX.Tensor.Tensorial where
 import HAX.PjRt.BufferType
 
@@ -18,6 +19,7 @@ import Data.Reflection
 import Data.Primitive
 import Data.Int
 
+import Foreign hiding (sizeOf)
 import Foreign.C (CIntPtr)
 
 import GHC.TypeLits
@@ -125,7 +127,7 @@ type Transpose operand perm result = (SameLength operand perm (TypeError (ShowTy
                                       result ~ TransposeImpl operand perm, KnownShape perm, KnownShape operand, KnownShape result)
 
 -- Tensorial
-class (Prim a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
+class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
   type SHLOType a
   type DenseSplatAttr a
   type DenseElemsAttr a
@@ -161,23 +163,55 @@ instance Tensorial Float where
   nullElement = 0
 
 -- Traceable
+-- NOTE: Consider separating the arguments of a function and its outputs
+type family NotFunction f :: Constraint where 
+  NotFunction (a -> b) = TypeError (ShowType (a -> b) :<>: Text " is a function!")
+  NotFunction _        = ()
+
+class NotFunction t => TraceableElement t where -- Undecidable super class extension because of this
+  constructTracer   :: NotFunction t => CIntPtr -> (CIntPtr, t)
+  deconstructTracer :: NotFunction t => t -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
+
+instance (TraceableElement a, TraceableElement b) => TraceableElement (a <+> b) where
+  constructTracer i0 = (i2, a :+: b)
+    where (i1, a) = constructTracer i0
+          (i2, b) = constructTracer i1
+  deconstructTracer (a :+: b) = (\ t0 -> do 
+    (t1, _a) <- a' t0
+    (t2, _b) <- b' t1
+    return (t2, _a ++ _b), join aSig bSig)
+    where (a', aSig) = deconstructTracer a 
+          (b', bSig) = deconstructTracer b
+          join :: ([AnyType], [AnyType]) -> ([AnyType], [AnyType]) -> ([AnyType], [AnyType])
+          join (_a, _b) (_c, _d) = (_a ++ _c, _b ++ _d)
+
+instance TraceableElement (Proxy a) where 
+  constructTracer     = (, Proxy)
+  deconstructTracer _ = (\ t -> return (t, []), ([], []))
+
 -- NOTE: What the performance difference between IntMap Value being outside/inside tuple
 class Traceable f where
   trace' :: CIntPtr -> f -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
--- Note since a <+> is a tree, care must be apply when traverse it so flatteninng and inflatting can be consistent
-instance (Traceable a, Traceable b) => Traceable (a <+> b) where
-  trace' _ (a :+: b) = (\ t0 -> do 
-    (t1, _lhs) <- fst lhs t0 
-    (t2, _rhs) <- fst rhs t1 
-    return (t2, _lhs ++ _rhs), join (snd lhs) (snd rhs))
-    where lhs = trace' errmsg a
-          rhs = trace' errmsg b
-          join :: ([AnyType], [AnyType]) -> ([AnyType], [AnyType]) -> ([AnyType], [AnyType])
-          join (_a, _b) (_c, _d) = (_a ++ _c, _b ++ _d)
-          errmsg = error "the traced function is not regular"
-instance Traceable (Proxy a) where
-  trace' _ _ = (\ tbl -> return (tbl, []), ([], []))
 
+-- Note since a <+> is a tree, care must be apply when traverse it so flatteninng and inflatting can be consistent
+instance TraceableElement t => Traceable t where
+  trace' _ = deconstructTracer
+
+instance (TraceableElement t, Traceable f) => Traceable (t -> f) where
+  trace' i f = trace' i' (f t)
+    where (i', t) = constructTracer i
+-- instance (Traceable a, Traceable b) => Traceable (a <+> b) where
+--   trace' _ (a :+: b) = (\ t0 -> do 
+--     (t1, _lhs) <- fst lhs t0 
+--     (t2, _rhs) <- fst rhs t1 
+--     return (t2, _lhs ++ _rhs), join (snd lhs) (snd rhs))
+--     where lhs = trace' errmsg a
+--           rhs = trace' errmsg b
+--           join :: ([AnyType], [AnyType]) -> ([AnyType], [AnyType]) -> ([AnyType], [AnyType])
+--           join (_a, _b) (_c, _d) = (_a ++ _c, _b ++ _d)
+--           errmsg = error "the traced function is not regular"
+-- instance Traceable (Proxy a) where
+--   trace' _ _ = (\ tbl -> return (tbl, []), ([], []))
 
 trace :: Traceable (a -> b) => (a -> b) -> (BlockM [Value], ([AnyType], [AnyType]))
 trace f = (fmap snd (_fst empty), _snd)
@@ -208,6 +242,7 @@ tensorType _ = RankedTensorType shape _type NullAttr
 tensorType' :: T s t => Proxy (a s t) -> AnyType 
 tensorType' = toAnyType . tensorType
 
+-- TODO: Move this class to another module, this module is a little too big already
 class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
   -- without type checking, internal use only
   -- it is easy to detach type from reality

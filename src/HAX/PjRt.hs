@@ -70,12 +70,9 @@ clientAddressableDevices (Client c) = unsafePerformIO $ do
   devices <- C.clientAddressableDevices api c
   return $ Device <$> devices 
   
-clientBufferFromHostBuffer :: Client -> ByteArray -> BufferType -> ShapeInfo -> HostBufferSemantics -> Device -> IO (Event, Buffer)
-clientBufferFromHostBuffer (Client c) hostBuffer bufferType shapeInfo hostBufferSemantics (Device d) = do
-  (eventPtr, bufferPtr) <- C.clientBufferFromHostBuffer api c hostBuffer bufferType shapeInfo hostBufferSemantics d
-  event <- newForeignPtrEnv C.eventDestroy__ptr api eventPtr
-  buffer <- newForeignPtrEnv C.bufferDestroy__ptr api bufferPtr
-  return (Event event, Buffer buffer)
+clientBufferFromHostBufferGC :: Client -> Ptr a -> BufferType -> ShapeInfo -> Device -> IO Buffer
+clientBufferFromHostBufferGC (Client c) hostBuffer bufferType shapeInfo (Device d) =
+  Buffer <$> (newForeignPtrEnv C.bufferDestroy__ptr api =<< C.clientBufferFromHostBufferGC api c hostBuffer bufferType shapeInfo d nullPtr)
 
 -- Buffer
 bufferToHostBuffer :: Buffer -> IO ByteArray

@@ -73,6 +73,7 @@ library
                       HAX.Target
                       HAX.AD
                       HAX.AD.Reverse
+                      HAX.AD.Numerical
                       HAX.AD.Gradient
                       HAX.Jit
                       HAX.Utils
@@ -103,8 +104,8 @@ library
                       stablehlo-hs,
                       primitive,
                       containers,
-                      reflection
-                      -- vector,
+                      reflection,
+                      random
 
 
     -- Directories containing source files.
@@ -178,5 +179,14 @@ test-suite HAX-test
     -- Test dependencies.
     build-depends:    base ^>=4.18.0.0,
                       HAX,
-                      reflection
+                      random
 
+test-suite HAX-AD-test
+    import:           warnings 
+    default-language: GHC2021
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test/AD
+    main-is:          Main.hs 
+    build-depends:    base,
+                      HAX,
+                      random
