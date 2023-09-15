@@ -6,12 +6,20 @@ module HAX.AD.Reverse where
 import HAX.Tensor.Tensorial
 
 import HAX.AD.Gradient
+import HAX.Utils
+
+import Control.Exception
 
 import Data.Proxy
 import Data.List
 
+import Foreign.C
+
 import Stablehlo.Dialect.Stablehlo.Attributes
 
+-- TODO: Consider using coerse instead of Dynamic for gradient
+--       Slightly more safe and more performance
+-- TODO: Use pattern syn 
 newtype Reverse r s t = Reverse (r s t, r s t -> Gradient)
 primal :: Reverse r s t -> r s t 
 primal (Reverse t) = fst t
@@ -19,8 +27,8 @@ primal (Reverse t) = fst t
 cotangent :: Reverse r s t -> r s t -> Gradient 
 cotangent (Reverse t) = snd t
 
--- TODO: Restrict this to only continuous types (Float, Double, etc)
---       Discrete types don't have derivatives
+
+
 instance Num (r s t) => Num (Reverse r s t) where
   (Reverse (f, f')) + (Reverse (g, g')) = 
     Reverse (f + g, \ i -> f' i <+> g' i)
@@ -45,10 +53,11 @@ instance Num (r s t) => Num (Reverse r s t) where
 
 instance Fractional (r s t) => Fractional (Reverse r s t) where
   recip (Reverse (f, f')) = 
-    Reverse (recip f, \ i -> f' (negate i / (f * f)))
+    Reverse (r, \ i -> f' (negate i * (r * r)))
+    where r = recip f
 
   (Reverse (f, f')) / (Reverse (g, g')) = 
-    Reverse (f / g, \ i -> f' (i / g) <+> g' (negate (f / (g * g))))
+    Reverse (f / g, \ i -> f' (i / g) <+> g' (negate (i * f / (g * g))))
 
   fromRational r = 
     Reverse (fromRational r, const zero)
@@ -128,6 +137,7 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
       in  f' $ reifyShape reductionResult derivative)
 
   splat i = Reverse (splat i, const zero)
+  linspace r = Reverse (linspace r, const zero)
 
   unsafeTranspose :: forall s0 s1. (KnownShape s0, KnownShape s1) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
   unsafeTranspose (Reverse (f, f')) perm = 
@@ -157,12 +167,53 @@ instance (TensorOp r t, Fractional t, forall s. KnownShape s => Fractional (r s 
       in  f' (unsafeBroadcast (i * g) _map / f))
     where g = unsafeReduceMul f dims
 
-
-
-
-
 instance (T s t, TraceableElement (r s t)) => TraceableElement (Reverse r s t) where
   constructTracer i = (i', Reverse (t, undefined), tt)
     where (i', t, tt) = constructTracer i
-
   deconstructTracer = deconstructTracer . primal
+
+class Cotangent (ReversedType r) => Reversable r where
+  type ReversedType r
+  constructReverse :: CIntPtr -> ReversedType r -> (CIntPtr, r)
+  gradReify :: Proxy r -> CIntPtr -> Gradient -> (CIntPtr, ReversedType r, Gradient)
+
+instance Cotangent (r s t) => Reversable (Reverse r s t) where
+  type ReversedType (Reverse r s t) = r s t
+  constructReverse i t = (i + 1, Reverse (t, independent i))
+  gradReify _ i (Gradient gs) = (i + 1, sum (fromDyn' <$> g), g')
+    where (fmap snd -> g, Gradient -> g') = partition ((i ==) . fst) gs
+
+instance (Reversable a, Reversable b) => Reversable (a <+> b) where
+  type ReversedType (a <+> b) = ReversedType a <+> ReversedType b
+  constructReverse i0 (a :+: b) = (i2, a' :+: b')
+    where (i1, a') = constructReverse i0 a
+          (i2, b') = constructReverse i1 b
+  gradReify _ i0 g0 = (i2, a' :+: b', g2)
+    where (i1, a', g1) = gradReify (Proxy :: Proxy a) i0 g0
+          (i2, b', g2) = gradReify (Proxy :: Proxy b) i1 g1
+-- TODO: Implement General
+
+class ReverseMode f where
+  type Rev g f
+  type GradResult f
+  rgrad' :: (Gradient -> g, CIntPtr) -> f -> Rev g f
+  rgradReify :: Annotated CIntPtr f -> Gradient -> GradResult f
+
+instance (Reversable j, Num (r s t)) => ReverseMode (j -> Reverse r s t) where
+  type Rev g (j -> Reverse r s t)      = ReversedType j -> g
+  type GradResult (j -> Reverse r s t) = ReversedType j
+  rgrad' (reifier, i) f t = reifier $ cotangent (f $ snd $ constructReverse i t) 1
+  rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i  -> (_, g, Gradient g')) = assert (null g') g
+
+instance (Reversable j, ReverseMode (a -> b)) => ReverseMode (j -> (a -> b)) where
+  type Rev g (j -> (a -> b))      = ReversedType j -> Rev g (a -> b)
+  type GradResult (j -> (a -> b)) = ReversedType j <+> GradResult (a -> b)
+  rgrad' (reifier, i) f t = rgrad' (reifier, i') (f r)
+    where (i', r) = constructReverse i t
+  rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i -> (i', g, g')) = g :+: rgradReify (Annotated i' :: Annotated CIntPtr (a -> b)) g'
+
+type RGrad f = Rev (GradResult f) f
+rgrad :: forall f. ReverseMode f => f -> RGrad f
+rgrad = rgrad' (rgradReify (Annotated 0 :: Annotated CIntPtr f), 0)
+
+

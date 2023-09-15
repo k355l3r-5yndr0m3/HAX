@@ -142,8 +142,7 @@ class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseInt
   staticSizeOf   :: Proxy a -> Int
 
   denseSplatAttr :: [Int64] -> a -> DenseSplatAttr a
-  -- TODO: Change ByteArray to something else that is parameterized by a 
-  denseElemsAttr :: [Int64] -> ByteArray -> Proxy a -> DenseElemsAttr a
+  denseElemsAttr :: [Int64] -> PrimArray a -> DenseElemsAttr a
 
   unitElement :: a  
   nullElement :: a
@@ -158,7 +157,9 @@ instance Tensorial Float where
   staticSizeOf   _ = sizeOf (0 :: Float)
   
   denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape F32Type NullAttr)
-  denseElemsAttr shape tensorData _ = DenseElementsRawBuffer (RankedTensorType shape F32Type NullAttr) tensorData
+  denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape F32Type NullAttr) (primArrayToByteArray tensorData)
+    where primArrayToByteArray :: PrimArray a -> ByteArray 
+          primArrayToByteArray (PrimArray a) = ByteArray a
 
   unitElement = 1
   nullElement = 0
@@ -206,6 +207,8 @@ instance (TraceableElement a0, TraceableElement a1) =>
 
 
 -- NOTE: What the performance difference between IntMap Value being outside/inside tuple
+--       The Traceable class should not be instanced directly, instead use TraceableElement 
+--       for types that can be inputs or outputs
 class Traceable f where
   trace' :: CIntPtr -> f -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
 
@@ -252,16 +255,10 @@ class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
   -- without type checking, internal use only
   -- it is easy to detach type from reality
   unsafeBroadcast  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
-  -- NOTE unsafeReduce by itself cannot be differentiated, use the other version instead
-
   unsafeDotGeneral :: (KnownShape s0, KnownShape s1, KnownShape s2) => a s0 t -> a s1 t -> DotDimensionNumbersAttr -> a s2 t
   unsafeTranspose  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
-
-
   unsafeReduceAdd :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
-
   unsafeReduceMul :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
-
 
   -- Type checked
   broadcast :: Broadcast org map targ => a org t -> Proxy map -> a targ t
@@ -282,11 +279,12 @@ class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
   sigma' :: forall s. (T s t, Num t) => a s t -> a '[] t
   sigma' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
 
-  pi :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
-  pi operand = unsafeReduceMul operand . shapeVal
+  -- Name collision, yes I hate it
+  _pi :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
+  _pi operand = unsafeReduceMul operand . shapeVal
 
-  pi' :: forall s. (T s t, Num t) => a s t -> a '[] t
-  pi' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
+  _pi' :: forall s. (T s t, Num t) => a s t -> a '[] t
+  _pi' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
   
   -- TODO: Implement + - * / etc with automatic broadcasting
   prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
@@ -297,11 +295,21 @@ class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
   matmul lhs rhs = unsafeDotGeneral lhs rhs attr
     where attr = DotDimensionNumbersAttr { getContractingDims = [(1, 0)], getBatchingDims = [] }
 
-  splat :: KnownShape s => t -> a s t
-
-
-
+  splat :: (KnownShape s) => t -> a s t
+  linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> a '[n] t
 
 (|#|) :: (TensorOp a t, TensorProductConstraint l r p) => a l t -> a r t -> a p t
 (|#|) = prod
-infixl 8 |#|
+infixl 9 |#|
+
+(|@|) :: (TensorOp r t, KnownNat n, KnownNat m, KnownNat q) => r '[n, m] t -> r '[m, q] t -> r '[n, q] t
+(|@|) = matmul
+infixl 8 |@|
+
+-- TODO: Add conditional
+relu :: Fractional a => a -> a
+relu x = x * ((signum x + 1) / 2)
+
+l2Loss :: (TensorOp a t, KnownShape s, Num t, Num (a s t)) => a s t -> a '[] t
+l2Loss x = sigma' $ x * x 
+

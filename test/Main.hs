@@ -10,6 +10,9 @@ import HAX.AD.Reverse
 import HAX.Target
 import HAX.Jit
 import HAX.AD.Numerical
+import HAX.Utils
+
+import Type.Reflection
 
 import System.Random
 
@@ -96,8 +99,19 @@ test20 x y z =
       x (y :: Target (Reverse Tracer) '[10, 5, 2] Float)
 
 
-traceDebugGrad :: (Rev (GradResult f) f ~ (a -> b), Traceable (a -> b), ReverseMode f) => f -> IO () 
-traceDebugGrad x = traceDebug $ rgrad x
+
+-- a <+> b as input
+test21 :: (Reverse Tracer [4, 5] Float <+> Reverse Tracer [5, 7] Float) -> Reverse Tracer [4, 7] Float
+test21 (a :+: b) = matmul a b
+
+test22 :: (Reverse Tracer [4, 5] Float <+> Reverse Tracer [5, 7] Float <+> Reverse Tracer [4, 7] Float) -> Reverse Tracer [4, 7] Float
+test22 (a :+: b :+: c) = (a `matmul` b) + c
+
+
+test23 :: Tracer '[5] Float -> Tracer '[] Float -> Tracer '[5] Float -> Tracer '[5] Float
+test23 x y z = x + z
+
+
 main :: IO ()
 main = do 
   traceDebug test1
@@ -118,8 +132,6 @@ main = do
 
   traceDebug test14
 
---  let tensor :: Tensor '[5, 5] Float = fromList [[i..i+4] | i <- [0..4]]
---  print tensor
 
   traceDebugGrad test15
   traceDebugGrad test16
@@ -140,20 +152,25 @@ main = do
         [[1],[2],[3],[4],[5]]
       c = matmul a b
 
-  print =<< debugTensorShape c
+  -- print =<< debugTensorShape c
+  -- print c
+  -- let d :: Tensor '[4, 1] Float = [[1], [2], [3], [4]]
+  -- print d
   print c
-  let d :: Tensor '[4, 1] Float = [[1], [2], [3], [4]]
-  print d
 
 
   let e = jit test10
   print $ e 1
 
-  print (onehot :: [Tensor '[5, 5] Float])
 
+  print ([fromRational i + fromRational j | i <- [0.0..6.0], j <- [-5.0..9.0]] :: [Tensor '[12] Float])
 
+  traceDebug test21
+  traceDebugGrad test21
+  traceDebug test22
+  traceDebugGrad test22
 
-
+  traceDebug test23
 
   clientDestroy client
   return ()

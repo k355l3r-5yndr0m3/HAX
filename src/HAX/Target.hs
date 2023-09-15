@@ -10,8 +10,6 @@ import HAX.Tensor.Tensor
 
 import HAX.AD.Gradient
 import HAX.AD.Reverse
-import HAX.AD
-
 
 import HAX.Jit
 import HAX.Utils
@@ -23,12 +21,8 @@ import Data.Proxy
 import Data.List
 import Data.Functor
 import Data.Bifunctor
--- import Data.IntMap.Strict hiding (null, map)
 
-import MLIR
 import Stablehlo.Dialect.Stablehlo.Attributes
-
-import Foreign.C (CIntPtr)
 
 import GHC.TypeLits
 
@@ -177,7 +171,6 @@ instance (Tensorial t, TensorOp r t, Transformable r t) => TensorOp (Target r) t
                 t1 :: r s1' t = unsafeReduceMul t0 axies'
             in  coerce $! t1
 
-
   unsafeDotGeneral :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 t -> DotDimensionNumbersAttr -> Target r s2 t
   unsafeDotGeneral lhs rhs attr = Target dims $ 
     reifyShape s0 $ \ s0' -> 
@@ -216,6 +209,8 @@ instance (Tensorial t, TensorOp r t, Transformable r t) => TensorOp (Target r) t
           perm' = [0..fromIntegral (length dim - 1)] ++ map (+ (fromIntegral $ length dim)) perm
 
   splat = Target [] . splat
+  linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> Target r '[n] t
+  linspace = Target [] . linspace
 
 class Vectorizable f where
   type Vectorized (i :: Nat) f = r | r -> i f
@@ -240,8 +235,6 @@ instance (T s t, TensorOp r t, Transformable r t, Vectorizable f) => Vectorizabl
 vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b) 
 vmap f = vmap' [] (const f)
 
-
-
 instance (T s t, TraceableElement (r s t), Transformable r t) => TraceableElement (Target r s t) where
   constructTracer i = (i', Target [] t, tt)
     where (i', t, tt) = constructTracer i
@@ -250,22 +243,18 @@ instance (T s t, TraceableElement (r s t), Transformable r t) => TraceableElemen
     deconstructTracer t
   deconstructTracer _ = error "deconstructTracer received an invalid target."
 
+instance Cotangent (r s t) => Reversable (Target (Reverse r) s t) where
+  type ReversedType (Target (Reverse r) s t) = r s t
+  constructReverse i t = (i', Target [] r)
+    where (i', r) = constructReverse i t
+  gradReify _ = gradReify (Proxy :: Proxy (Reverse r s t))
 
+instance (Reversable j, Num (r s t)) => ReverseMode (j -> Target (Reverse r) s t) where
+  type Rev g (j -> Target (Reverse r) s t)      = ReversedType j -> g
+  type GradResult (j -> Target (Reverse r) s t) = ReversedType j
 
-
-
--- currently, this is not possible `vmap (rgrad f)` but this should be possible `rgrad (vmap f)` which should be identical
-instance (Cotangent (r0 s0 t0), Num (r s t)) => ReverseMode (Target (Reverse r0) s0 t0 -> Target (Reverse r) s t) where
-  type Rev g (Target (Reverse r0) s0 t0 -> Target (Reverse r) s t) = Target r0 s0 t0 -> g
-  type GradResult (Target (Reverse r0) s0 t0 -> Target (Reverse r) s t) = Target r0 s0 t0
-  rgrad' (g, i) f (Target dim t) = assert (null dim && null dim') $ g (cotangent g' 1)
-    where Target dim' g' = f (Target dim $ Reverse (t, independent i))
-  rgradReify (Annotated idx) (reifyGrad idx -> (g, Gradient g')) = assert (null g') $ Target [] g
-
-instance (ReverseMode (a -> f), Cotangent (r s t)) => ReverseMode (Target (Reverse r) s t -> a -> f) where
-  type Rev g (Target (Reverse r) s t -> a -> f) = Target r s t -> Rev g (a -> f)
-  type GradResult (Target (Reverse r) s t -> a -> f) = Target r s t <+> GradResult (a -> f)
-  rgrad' (g, i) f (Target dim t) = assert (null dim) $ rgrad' (g, i + 1) (f $ Target [] $ Reverse (t, independent i))
-  rgradReify (Annotated idx) (reifyGrad idx -> (g, g')) = Target [] g :+: rgradReify (Annotated (idx + 1) :: Annotated CIntPtr (a -> f)) g'
+  rgrad' (reifier, i) f t = assert (null dims) reifier $ cotangent r 1
+    where Target dims r = f $ snd $ constructReverse i t
+  rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i  -> (_, g, Gradient g')) = assert (null g') g
 
 type instance JitTransform (Target r s t) = Tensor s t

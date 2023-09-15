@@ -60,7 +60,7 @@ data-files:         deps/libPJRTPlugin.so
 
 
 common warnings
-    ghc-options: -Wall -fprint-potential-instances -freduction-depth=512
+    ghc-options: -Wall -fprint-potential-instances -freduction-depth=512 -O2
 
 library
     -- Import common warning flags.
@@ -146,7 +146,8 @@ executable HAX
     -- Other library packages from which modules are imported.
     build-depends:
         base ^>=4.18.0.0,
-        HAX
+        HAX,
+        random
 
     -- Directories containing source files.
     hs-source-dirs:   example
@@ -191,3 +192,14 @@ test-suite HAX-AD-test
     build-depends:    base,
                       HAX,
                       random
+
+test-suite HAX-GD-test
+    import:           warnings 
+    default-language: GHC2021
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test/GD
+    main-is:          Main.hs 
+    build-depends:    base,
+                      HAX,
+                      random
+

@@ -13,10 +13,7 @@ import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.Utils
 
-import Control.Exception
-
 import Data.Proxy
-import Data.Kind
 import Data.Primitive hiding (newArray)
 import Data.Int
 
@@ -24,29 +21,14 @@ import Foreign
 
 import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.IsList
-
-import MLIR
-import qualified Stablehlo.Dialect.Stablehlo as SHLO
+import GHC.TypeLits
 
 newtype Tensor (s :: Shape) a = Tensor { getUnderlyingBuffer :: Buffer }
 debugTensorShape :: Tensor s t -> IO [Int64]
 debugTensorShape = bufferDimensions . getUnderlyingBuffer
 
--- TODO: Consider removing the class Trace, it is currently doing nothing
-class Trace (t :: Shape -> Type -> Type) where
-  auto :: forall s a. T s a => Tensor s a -> t s a
-
-instance Trace Tensor where
-  auto = id
-
-instance Trace Tracer where
-  auto :: forall s a. T s a => Tensor s a -> Tracer s a
-  auto tensor = Tracer $ \ t0 -> do 
-    buffer <- blockRunIO $ bufferToHostBuffer $ getUnderlyingBuffer tensor
-    let _attr = denseElemsAttr shape buffer (Proxy :: Proxy a)
-    (t0, ) <$> SHLO._ConstantOp _attr _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s a))
-          shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+getScalar :: Tensorial t => Tensor '[] t -> t
+getScalar (Tensor b) = unsafePerformIO $ (`indexByteArray` 0) <$> bufferToHostBuffer b
 
 -- Pretty print tensor
 -- TODO: Fix, because this is just bad
@@ -70,8 +52,6 @@ instance (T s a, Show a, Prim a) => Show (Tensor s a) where
               let c = if idx == ext then ']' else ','
                   (s', offs') = formater offs ies buf (c:s)
               in  formater offs' ((idx - 1, ext):ies) buf s'
-
-
 
 resizeList :: Int -> a -> [a] -> [a]
 resizeList len pad list
@@ -110,6 +90,10 @@ instance ListToTensor s t => IsList (Tensor s t) where
           l' = newArray $ flatten p $ regularize p (nullElement :: t) l
   toList = error "TODO: Implement"
 
+tensorToPrimArray :: Tensor s t -> PrimArray t
+tensorToPrimArray (Tensor buffer) = unsafePerformIO $ conv <$> bufferToHostBuffer buffer
+  where conv (ByteArray a) = PrimArray a
+
 tensorFromHostBufferGC :: forall s t. T s t => Device -> Ptr t -> IO (Tensor s t)
 tensorFromHostBufferGC device hostBuffer = Tensor <$>
   clientBufferFromHostBufferGC client hostBuffer (pjrtBufferType p) (Shape shape) device
@@ -127,13 +111,8 @@ instance JitReify (Tensor s t) where
   jitReify (Annotated (a:as)) = (Tensor a, as)
   jitReify (Annotated [])     = error "Program did not produced enough outputs"
 
-instance Jit (Tensor s t) where 
-  jit' (Annotated args, (nout, program)) = assert (null leftover) result
-    where outputs :: Annotated [Buffer] (Tensor s t) = Annotated . unsafePerformIO $ loadedExecutableExecute1Await program args Nothing nout
-          (result, leftover) = jitReify outputs
+  jitUnreify (Annotated args) (Tensor buffer) = Annotated (args ++ [buffer])
 
-instance Jit f => Jit (Tensor s t -> f) where
-  jit' (Annotated args, prog) (Tensor b) = jit' (Annotated (args ++ [b]), prog)
 
 type instance JitTransform (Tracer s t) = Tensor s t
 
@@ -145,9 +124,19 @@ type family JitTracer f where
   JitTracer (a <+> b) = JitTracer a <+> JitTracer b
   JitTracer a         = JitTracerTransform a
 
+-- NOTE: Putting NOINLINE pragma here decrease instances of 
+--       repeated compilation, but does not elimenate all 
+--       instances
+{-# NOINLINE jit #-}
 jit :: forall a b f f'. (f ~ (a -> b), Traceable f, f' ~ JitResult f, Jit f', f ~ JitTracer f') => f -> f'
-jit f = jit' jitData
-  where jitData = (Annotated [] :: Annotated [Buffer] f', ) . unsafePerformIO $ compile f
+jit f = jit' $! jitData
+  where jitData = (Annotated [] :: Annotated [Buffer] f', compile f)
+
+-- TODO: Solve repeated compilation
+--       This is probably because the LoadedExecutable ref count to zero 
+--       so it needs to be repeatedly recompiled
+--       Possible solution, stableptr
+
 
 instance (T s t, Num t) => Num (Tensor s t) where
   (+) = jit (+)
@@ -160,11 +149,15 @@ instance (T s t, Num t) => Num (Tensor s t) where
 
   fromInteger = unsafePerformIO . tensorSplat defaultDevice . fromIntegral
 
-instance (KnownShape s, Tensorial t, Fractional t) => Fractional (Tensor s t) where
+instance (T s t, Fractional t) => Fractional (Tensor s t) where
   (/) = jit (/)
   recip = jit recip
 
   fromRational = unsafePerformIO . tensorSplat defaultDevice . fromRational
+
+instance (T s t, Floating t) => Floating (Tensor s t) where
+  sin = jit sin
+
 
 instance Tensorial t => TensorOp Tensor t where
   unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand
@@ -174,3 +167,26 @@ instance Tensorial t => TensorOp Tensor t where
   splat a = unsafePerformIO $ tensorSplat defaultDevice a
   unsafeReduceAdd operand axies = jit (`unsafeReduceAdd` axies) operand
   unsafeReduceMul operand axies = jit (`unsafeReduceMul` axies) operand
+
+  -- TODO: do better
+  linspace :: forall n. (KnownNat n, Fractional t, Enum t) => (t, t) -> Tensor '[n] t
+  linspace (a, b) = unsafePerformIO $ do 
+    buffer <- mallocArray nelem
+    populate ((buffer, a), (nelem, b))
+    tensorFromHostBufferGC defaultDevice buffer 
+    where nelem = fromInteger $ natVal (Proxy :: Proxy n)
+          populate :: ((Ptr t, t), (Int, t)) -> IO ()
+          populate ((ptr, bottom), (len, top))
+            | len <= 0  = return ()
+            | even len  = do 
+              pokeElemOff ptr (len - 1) top
+              populate ((ptr, bottom), (len - 1, top - step))
+            | otherwise = do 
+              let middle = len `div` 2
+                  value  = (bottom + top) / 2
+              pokeElemOff ptr middle value
+              populate ((ptr, bottom), (middle, value - step))
+              populate ((advancePtr ptr (middle + 1), value + step), (middle, top))
+          step  = (b - a) / (fromIntegral nelem - 1)
+
+

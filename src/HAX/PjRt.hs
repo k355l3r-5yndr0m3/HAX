@@ -1,7 +1,6 @@
 {-# LANGUAGE UnliftedFFITypes #-}
 module HAX.PjRt where
 
-import HAX.PjRt.HostBufferSemantics (HostBufferSemantics)
 import HAX.PjRt.BufferType (BufferType)
 import HAX.PjRt.Plugin (ShapeInfo(..))
 
@@ -63,8 +62,8 @@ clientPlatformName (Client c) = C.clientPlatformName api c
 
 clientCompile :: Client -> ByteCode -> IO LoadedExecutable
 clientCompile (Client c) bytecode = do
-  i <- newUnique
-  traceIO $ "Compiling " ++ show (hashUnique i) -- Tibit of code to check for recompilation, debugging only
+  -- i <- newUnique
+  -- traceIO $ "Compiling " ++ show (hashUnique i) -- Tibit of code to check for recompilation, debugging only
   executable <- newForeignPtrEnv C.loadedExecutableDestroy__ptr api =<< C.clientCompile api c bytecode 
   return $ LoadedExecutable executable
 

@@ -1,39 +1,26 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
-{-# LANGUAGE ViewPatterns #-}
-module HAX.AD where
+module HAX.AD (
+  module Reverse
+, traceDebugGrad
+, jrgrad
+)where
+import HAX.Jit
 
-import HAX.AD.Gradient
-import HAX.AD.Reverse
+import HAX.Tensor.Tensorial
+import HAX.AD.Reverse as Reverse
+import HAX.AD.Numerical as Numerical
 
-import HAX.Utils
+traceDebugGrad :: (Rev (GradResult f) f ~ (a -> b), Traceable (a -> b), ReverseMode f) => f -> IO ()
+traceDebugGrad x = traceDebug $ rgrad x
 
-import Foreign.C
-import Control.Exception (assert)
+jrgrad :: (Rev (GradResult (a1 -> b1)) (a1 -> b1) ~ (a2 -> b2),
+                TraceableElement a1, TraceableElement a2, Traceable b1,
+                Traceable b2, Jit (JitTransform a1 -> JitResult b1),
+                Jit (JitTransform a2 -> JitResult b2), ReverseMode (a1 -> b1)) =>
+               (a1 -> b1)
+               -> (JitTransform a1 -> JitResult b1,
+                   JitTransform a2 -> JitResult b2)
+jrgrad f = (jit f, jit $ rgrad f)
 
 
-
-class ReverseMode f where
-  type Rev g f
-  type GradResult f
-  rgrad' :: (Gradient -> g, CIntPtr) -> f -> Rev g f
-  rgradReify :: Annotated CIntPtr f -> Gradient -> GradResult f
-
--- NOTE: This is somewhat undesireable since some part of the code overlap eachother
---       which could be solved by add another class for types that can be arguments to 
---       differentiable functions
-instance (Cotangent (r0 s0 t0), Num (r s t)) => ReverseMode (Reverse r0 s0 t0 -> Reverse r s t) where
-  type Rev g (Reverse r0 s0 t0 -> Reverse r s t) = r0 s0 t0 -> g
-  type GradResult (Reverse r0 s0 t0 -> Reverse r s t) = r0 s0 t0
-  rgrad' (g, i) f t = g (cotangent (f $ Reverse (t, independent i)) 1)
-  rgradReify (Annotated idx) (reifyGrad idx -> (g, Gradient g')) = assert (null g') g
-
-instance (ReverseMode (a -> f), Cotangent (r s t)) => ReverseMode (Reverse r s t -> a -> f) where
-  type Rev g (Reverse r s t -> a -> f) = r s t -> Rev g (a -> f)
-  type GradResult (Reverse r s t -> a -> f) = r s t <+> GradResult (a -> f)
-  rgrad' (g, i) f t = rgrad' (g, i + 1) (f $ Reverse (t, independent i))
-  rgradReify (Annotated idx) (reifyGrad idx -> (g, g')) = g :+: rgradReify (Annotated (idx + 1) :: Annotated CIntPtr (a -> f)) g'
-
-type RGrad f = Rev (GradResult f) f
-rgrad :: forall f. ReverseMode f => f -> RGrad f
-rgrad = rgrad' (rgradReify (Annotated 0 :: Annotated CIntPtr f), 0)

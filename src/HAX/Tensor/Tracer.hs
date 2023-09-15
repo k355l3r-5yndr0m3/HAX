@@ -8,13 +8,18 @@ import Prelude hiding (lookup)
 import HAX.Tensor.Tensorial
 
 import Control.Exception
+import Control.Monad.Primitive
 
 import Data.IntMap.Strict hiding (singleton, null, map, foldl)
 import Data.List (singleton)
 import Data.Proxy
+import Data.Primitive
+
 import Foreign
 
 import GHC.StableName
+import GHC.TypeLits
+import GHC.IO.Unsafe
 
 import MLIR
 
@@ -173,13 +178,6 @@ unsafeReduceTracer operand body (splat -> initvalue :: Tracer '[] t) dims = mkTr
         scalar = tensorType' (Proxy :: Proxy (Tracer '[] t))
 
 instance Tensorial t => TensorOp Tracer t where
-  sigma operand = unsafeReduceAdd operand . shapeVal
-  sigma' :: forall s. (T s t, Num t) => Tracer s t -> Tracer '[] t
-  sigma' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
-  pi operand = unsafeReduceMul operand . shapeVal
-  pi' :: forall s. (T s t, Num t) => Tracer s t -> Tracer '[] t
-  pi' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
-
   unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeBroadcast operand idxmap@(BroadcastMap . fmap fromInteger -> _map) = 
     assert correctness $ mkTracer $ do 
@@ -205,12 +203,6 @@ instance Tensorial t => TensorOp Tracer t where
     retval $ SHLO._DotGeneralOp attr Nothing _lhs _rhs _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
 
-  splat :: forall s. T s t => t -> Tracer s t
-  splat value = mkTracer $ do 
-    retval $ SHLO._ConstantOp (denseSplatAttr shape value) _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-          shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
-
   unsafeTranspose :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeTranspose operand perm = assert correctness $ mkTracer $ do 
     _operand <- sharing operand 
@@ -227,3 +219,55 @@ instance Tensorial t => TensorOp Tracer t where
                 resultShape  = shapeVal (Proxy :: Proxy s1)
             in  uniqueness perm && resultShape == map ((operandShape !!) . fromInteger) perm
           attr = TransposePerm (fromInteger <$> perm)
+
+  splat :: forall s. T s t => t -> Tracer s t
+  splat value = mkTracer $ do 
+    retval $ SHLO._ConstantOp (denseSplatAttr shape value) _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+          shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+  
+  -- TODO: Implement a better linspace
+  linspace :: forall n. (KnownNat n, Fractional t, Enum t) => (t, t) -> Tracer '[n] t
+  --linspace (a, b) = mkTracer $ do
+  --  retval $ SHLO._ConstantOp attr $ toAnyType _type
+  --  where step  = (b - a) / (fromInteger nelem - 1)
+  --        nelem = natVal (Proxy :: Proxy n)
+  --        _data = take (fromInteger nelem) [a,a + step..]
+  --        primArrayToByteArray (PrimArray r) = ByteArray r
+  --        attr  = DenseElementsRawBuffer _type $ primArrayToByteArray $ primArrayFromList _data
+  --        _type = tensorType (Proxy :: Proxy (Tracer '[n] t))
+  linspace (a, b) = mkTracer $ 
+    retval $ SHLO._ConstantOp attr $ toAnyType _type 
+    where _type = tensorType (Proxy :: Proxy (Tracer '[n] t))
+          attr  = DenseElementsRawBuffer _type $ unsafePerformIO buf
+          nelem = fromInteger $ natVal (Proxy :: Proxy n)
+          buf = do 
+            buffer :: MutablePrimArray RealWorld t <- newPrimArray nelem 
+            populate buffer ((0, a), (nelem - 1, b))
+            undefined
+          populate :: MutablePrimArray RealWorld t -> ((Int, t), (Int, t)) -> IO ()
+          populate array ((offset, bottom), (len, top)) 
+            | len <= 0  = return ()
+            | even len  = do 
+              writePrimArray array (offset + len - 1) top
+              populate array ((offset, bottom), (len - 1, top - stepsize))
+            | otherwise = do 
+              let center = len `div` 2
+                  value  = (a + b) / 2
+              writePrimArray array center value
+              populate array ((offset, bottom), (center, value - stepsize))
+              populate array ((center + 1, value + stepsize), (center, top))
+          stepsize = (b - a) / (fromIntegral nelem - 1)
+
+instance (T s t, Floating t) => Floating (Tracer s t) where
+  pi = fromRational (toRational (pi :: Double))
+  sin operand = mkTracer $ do 
+    _operand <- sharing operand 
+    retval $ SHLO._SineOp _operand _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
+
+
+
+
+
