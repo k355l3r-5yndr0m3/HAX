@@ -27,7 +27,7 @@ import Paths_HAX
 -- TODO: Implement using a nullity type class
 {-# NOINLINE api #-}
 api :: Ptr C.Api
-api = unsafePerformIO $ C.loadPjRtPlugin =<< getDataFileName "deps/libPJRTPlugin.so"
+api = unsafePerformIO $ C.loadPjRtPlugin =<< getDataFileName "libPJRTPlugin.so"
 
 {-# NOINLINE client #-}
 client :: Client

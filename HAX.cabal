@@ -45,22 +45,27 @@ maintainer:
 category:           Math
 build-type:         Custom
 
-custom-setup
-  setup-depends:    Cabal,
-                    directory,
-                    filepath,
-                    base,
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files:    CHANGELOG.md
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
--- extra-source-files:
-data-files:         deps/libPJRTPlugin.so
 
+data-files:         libPJRTPlugin.so
+
+data-dir:           deps
+
+extra-source-files: deps/libcompops.a
+                    cbits/pjrt_c_api.h
+
+custom-setup
+  setup-depends:    Cabal,
+                    directory,
+                    filepath,
+                    base
 
 common warnings
-    ghc-options: -Wall -fprint-potential-instances -freduction-depth=512 -O2
+    ghc-options: -Wall -fprint-potential-instances
 
 library
     -- Import common warning flags.
@@ -83,7 +88,6 @@ library
     -- Modules included in this library but not exported.
     other-modules:    Paths_HAX
                       HAX.Tensor.Tensorial
-                      -- HAX.Tensor.Target
                       HAX.Tensor.Tracer
                       HAX.Tensor.Tensor
                       HAX.PjRt.BufferType
@@ -116,11 +120,9 @@ library
     default-language: GHC2021
 
     -- TODO: Make this a bundled library
-    -- extra-libraries:  compops 
     include-dirs:     cbits
-    includes:         cbits/pjrt_c_api.h
 
-    extra-lib-dirs:   /home/cha0s/HAX/deps
+
     extra-bundled-libraries:
                       Ccompops
 
