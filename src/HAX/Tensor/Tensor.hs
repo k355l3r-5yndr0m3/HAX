@@ -121,7 +121,7 @@ type family JitTracerTransform f
 type instance JitTracerTransform (Tensor s t) = Tracer s t
 type family JitTracer f where 
   JitTracer (a ->  b) = JitTracerTransform a -> JitTracer b
-  JitTracer (a <+> b) = JitTracer a <+> JitTracer b
+  JitTracer (a <&> b) = JitTracer a <&> JitTracer b
   JitTracer a         = JitTracerTransform a
 
 -- NOTE: Putting NOINLINE pragma here decrease instances of 
@@ -136,8 +136,6 @@ jit f = jit' $! jitData
 --       This is probably because the LoadedExecutable ref count to zero 
 --       so it needs to be repeatedly recompiled
 --       Possible solution, stableptr
-
-
 instance (T s t, Num t) => Num (Tensor s t) where
   (+) = jit (+)
   (-) = jit (-)
@@ -156,19 +154,24 @@ instance (T s t, Fractional t) => Fractional (Tensor s t) where
   fromRational = unsafePerformIO . tensorSplat defaultDevice . fromRational
 
 instance (T s t, Floating t) => Floating (Tensor s t) where
+  pi = unsafePerformIO $ tensorSplat defaultDevice pi
+
   sin = jit sin
+  cos = jit cos
+  tan = jit tan
 
+  tanh = jit tanh
 
-instance Tensorial t => TensorOp Tensor t where
+  exp = jit exp
+  log = jit log
+
+instance Tensorial t => ShapeOp Tensor t where
   unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand
-  unsafeDotGeneral lhs rhs attr = jit (\ _lhs _rhs -> unsafeDotGeneral _lhs _rhs attr) lhs rhs
   unsafeTranspose operand perm = jit (`unsafeTranspose` perm) operand
 
   splat a = unsafePerformIO $ tensorSplat defaultDevice a
-  unsafeReduceAdd operand axies = jit (`unsafeReduceAdd` axies) operand
-  unsafeReduceMul operand axies = jit (`unsafeReduceMul` axies) operand
 
-  -- TODO: do better
+instance (Num t, Tensorial t) => MathOp Tensor t where
   linspace :: forall n. (KnownNat n, Fractional t, Enum t) => (t, t) -> Tensor '[n] t
   linspace (a, b) = unsafePerformIO $ do 
     buffer <- mallocArray nelem
@@ -189,4 +192,12 @@ instance Tensorial t => TensorOp Tensor t where
               populate ((advancePtr ptr (middle + 1), value + step), (middle, top))
           step  = (b - a) / (fromIntegral nelem - 1)
 
+  unsafeDotGeneral lhs rhs attr = jit (\ _lhs _rhs -> unsafeDotGeneral _lhs _rhs attr) lhs rhs
+
+  unsafeReduceAdd operand axies = jit (`unsafeReduceAdd` axies) operand
+  unsafeReduceMul operand axies = jit (`unsafeReduceMul` axies) operand
+
+instance Tensorial t => SelectOp Tensor t where
+  branch = jit branch
+  select = jit select
 

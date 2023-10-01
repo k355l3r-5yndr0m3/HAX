@@ -6,7 +6,9 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
+{-# LANGUAGE GeneralisedNewtypeDeriving #-}
 module HAX.Tensor.Tensorial where
+import Prelude hiding (pred)
 import HAX.PjRt.BufferType
 
 import HAX.Utils
@@ -25,7 +27,7 @@ import Foreign.C (CIntPtr)
 
 import GHC.TypeLits
 
-import MLIR 
+import MLIR
 import qualified MLIR.Dialect.Func           as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
@@ -164,6 +166,43 @@ instance Tensorial Float where
   unitElement = 1
   nullElement = 0
 
+instance Tensorial Word8 where
+  type SHLOType Word8 = IntegerType
+  type DenseSplatAttr Word8 = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Word8
+  type DenseElemsAttr Word8 = DenseElementsRawBuffer (RankedTensorType NullAttr IntegerType)
+
+  pjrtBufferType _ = u8
+  shloTensorType _ = UI8
+  staticSizeOf   _ = sizeOf (0 :: Word8)
+
+  denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape UI8 NullAttr)
+  denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
+    where primArrayToByteArray :: PrimArray a -> ByteArray 
+          primArrayToByteArray (PrimArray a) = ByteArray a
+  
+  unitElement = 1
+  nullElement = 1
+newtype Pred = Pred Word8 deriving (Eq, Prim, Storable)
+instance Show Pred where 
+  show (Pred 0) = "False"
+  show _        = "True "
+instance Tensorial Pred where
+  type SHLOType Pred = IntegerType
+  type DenseSplatAttr Pred = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Word8
+  type DenseElemsAttr Pred = DenseElementsRawBuffer (RankedTensorType NullAttr IntegerType)
+  
+  pjrtBufferType _ = pred
+  shloTensorType _ = I 1
+  staticSizeOf   _ = sizeOf (0 :: Word8)
+
+  denseSplatAttr shape (Pred w) = DenseIntOrFPElements (RankedTensorType shape (I 1) NullAttr) w
+  denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
+    where primArrayToByteArray :: PrimArray a -> ByteArray 
+          primArrayToByteArray (PrimArray a) = ByteArray a
+
+  unitElement = Pred 1
+  nullElement = Pred 0
+
 -- Traceable
 -- NOTE: Consider separating the arguments of a function and its outputs
 type family NotFunction f :: Constraint where 
@@ -174,11 +213,11 @@ class NotFunction t => TraceableElement t where -- Undecidable super class exten
   constructTracer   :: NotFunction t => CIntPtr -> (CIntPtr, t, [AnyType])
   deconstructTracer :: NotFunction t => t -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
 
-instance (TraceableElement a, TraceableElement b) => TraceableElement (a <+> b) where
-  constructTracer i0 = (i2, a :+: b, at ++ bt)
+instance (TraceableElement a, TraceableElement b) => TraceableElement (a <&> b) where
+  constructTracer i0 = (i2, a :&: b, at ++ bt)
     where (i1, a, at) = constructTracer i0
           (i2, b, bt) = constructTracer i1
-  deconstructTracer (a :+: b) = (\ t0 -> do 
+  deconstructTracer (a :&: b) = (\ t0 -> do 
     (t1, _a) <- a' t0
     (t2, _b) <- b' t1
     return (t2, _a ++ _b), join aSig bSig)
@@ -249,18 +288,12 @@ tensorType _ = RankedTensorType shape _type NullAttr
 tensorType' :: T s t => Proxy (a s t) -> AnyType 
 tensorType' = toAnyType . tensorType
 
--- TODO: Move this class to another module, this module is a little too big already
-class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
---  {-# MINIMAL unsafeBroadcast, unsafeDotGeneral, unsafeTranspose, (unsafeReduce | (unsafeReduceAdd, unsafeReduceMul)), splat #-}
+class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
   -- without type checking, internal use only
   -- it is easy to detach type from reality
   unsafeBroadcast  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
-  unsafeDotGeneral :: (KnownShape s0, KnownShape s1, KnownShape s2) => a s0 t -> a s1 t -> DotDimensionNumbersAttr -> a s2 t
   unsafeTranspose  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
-  unsafeReduceAdd :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
-  unsafeReduceMul :: (KnownShape s0, KnownShape s1, Num t) => a s0 t -> [Integer] -> a s1 t
 
-  -- Type checked
   broadcast :: Broadcast org map targ => a org t -> Proxy map -> a targ t
   broadcast operand (shapeVal -> _map) = unsafeBroadcast operand _map
 
@@ -273,36 +306,54 @@ class Tensorial t => TensorOp (a :: Shape -> Type -> Type) t where
   transpose :: Transpose operand perm result => a operand t -> Proxy perm -> a result t
   transpose operand = unsafeTranspose operand . shapeVal
 
-  sigma :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
+  splat :: (KnownShape s) => t -> a s t
+
+class ShapeOp r t => MathOp r t where
+  unsafeDotGeneral :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> DotDimensionNumbersAttr -> r s2 t
+  unsafeReduceAdd  :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
+  unsafeReduceMul  :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
+
+  linearMap :: (KnownNat i, KnownNat o) => r '[i, o] t -> r '[i] t -> r '[o] t 
+  linearMap mat vec = unsafeDotGeneral mat vec dotAttr 
+    where dotAttr = DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [(0, 0)] }
+
+  sigma :: (KnownShape s, KnownShape s', KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
   sigma operand = unsafeReduceAdd operand . shapeVal
 
-  sigma' :: forall s. (T s t, Num t) => a s t -> a '[] t
+  sigma' :: forall s. (T s t, Num t) => r s t -> r '[] t
   sigma' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
 
   -- Name collision, yes I hate it
-  _pi :: (KnownShape s, KnownShape r, KnownShape (Reduce s r), Num t) => a s t -> Proxy r -> a (Reduce s r) t
+  _pi :: (KnownShape s, KnownShape s', KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
   _pi operand = unsafeReduceMul operand . shapeVal
 
-  _pi' :: forall s. (T s t, Num t) => a s t -> a '[] t
+  _pi' :: forall s. (T s t, Num t) => r s t -> r '[] t
   _pi' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
-  
+
   -- TODO: Implement + - * / etc with automatic broadcasting
-  prod :: (TensorProductConstraint l r p, Tensorial t) => a l t -> a r t -> a p t
+  prod :: (TensorProductConstraint lhs rhs p, Tensorial t) => r lhs t -> r rhs t -> r p t
   prod x y = unsafeDotGeneral x y attr
     where attr = DotDimensionNumbersAttr { getContractingDims = [], getBatchingDims = [] }
   
-  matmul :: (T '[m, n] t, T '[n, p] t, T '[m, p] t) => a '[m, n] t -> a '[n, p] t -> a '[m, p] t
+  matmul :: (T '[m, n] t, T '[n, p] t, T '[m, p] t) => r '[m, n] t -> r '[n, p] t -> r '[m, p] t
   matmul lhs rhs = unsafeDotGeneral lhs rhs attr
     where attr = DotDimensionNumbersAttr { getContractingDims = [(1, 0)], getBatchingDims = [] }
 
-  splat :: (KnownShape s) => t -> a s t
-  linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> a '[n] t
+  linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> r '[n] t
 
-(|#|) :: (TensorOp a t, TensorProductConstraint l r p) => a l t -> a r t -> a p t
+-- TODO: Change Word8 to Pred
+class Tensorial t => SelectOp r t where
+  branch :: KnownShape s => r s t -> r s t -> r '[] Word8 -> r s t
+  select :: KnownShape s => r s t -> r s t -> r s   Word8 -> r s t
+
+class Tensorial t => ComparisonOp r t where
+  equality :: KnownShape s => r s t -> r s t -> r s Word8
+
+(|#|) :: (MathOp a t, TensorProductConstraint l r p) => a l t -> a r t -> a p t
 (|#|) = prod
 infixl 9 |#|
 
-(|@|) :: (TensorOp r t, KnownNat n, KnownNat m, KnownNat q) => r '[n, m] t -> r '[m, q] t -> r '[n, q] t
+(|@|) :: (MathOp r t, KnownNat n, KnownNat m, KnownNat q) => r '[n, m] t -> r '[m, q] t -> r '[n, q] t
 (|@|) = matmul
 infixl 8 |@|
 
@@ -310,6 +361,5 @@ infixl 8 |@|
 relu :: Fractional a => a -> a
 relu x = x * ((signum x + 1) / 2)
 
-l2Loss :: (TensorOp a t, KnownShape s, Num t, Num (a s t)) => a s t -> a '[] t
+l2Loss :: (MathOp a t, KnownShape s, Num t, Num (a s t)) => a s t -> a '[] t
 l2Loss x = sigma' $ x * x 
-

@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE DataKinds #-}
 module HAX.Jit where
 
 import HAX.Tensor.Tensorial
@@ -8,7 +9,7 @@ import HAX.Tensor.Tensorial
 import HAX.PjRt
 import HAX.Utils
 
-import Control.Exception
+import Control.Exception (assert)
 import Data.Proxy
 import Data.Bifunctor
 
@@ -18,6 +19,7 @@ import qualified MLIR.Dialect.Func           as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
 import GHC.IO.Unsafe
+import GHC.TypeError
 
 {-# NOINLINE compile #-}
 compile :: Traceable (a -> b) => (a -> b) -> (Int, LoadedExecutable)
@@ -42,11 +44,11 @@ class JitReify f where
   jitReify :: Annotated [Buffer] f -> (f, [Buffer])
   jitUnreify :: Annotated [Buffer] a -> f -> Annotated [Buffer] b
 
-instance (JitReify a, JitReify b) => JitReify (a <+> b) where
-  jitReify (Annotated outs) = (a :+: b, bs)
+instance (JitReify a, JitReify b) => JitReify (a <&> b) where
+  jitReify (Annotated outs) = (a :&: b, bs)
     where (a, as) = jitReify (Annotated outs :: Annotated [Buffer] a)
           (b, bs) = jitReify (Annotated as   :: Annotated [Buffer] b)
-  jitUnreify args (a :+: b) = jitUnreify (jitUnreify args a) b
+  jitUnreify args (a :&: b) = jitUnreify (jitUnreify args a) b
 
 type JitData f = (Annotated [Buffer] f, (Int, LoadedExecutable))
 class Jit f where
@@ -62,8 +64,9 @@ instance {-# OVERLAPPING #-} (JitReify i, Jit f) => Jit (i -> f) where
 
 -- JitTransform should never receive a function
 type family JitTransform a
+type instance JitTransform (a -> b)  = TypeError (Text "Jit should not receive high order function.")
 type instance JitTransform (Proxy a) = Proxy a 
-type instance JitTransform (a <+> b) = JitTransform a <+> JitTransform b
+type instance JitTransform (a <&> b) = JitTransform a <&> JitTransform b
 type family JitResult f where
   JitResult (a ->  b) = JitTransform a -> JitResult b
   JitResult a         = JitTransform a

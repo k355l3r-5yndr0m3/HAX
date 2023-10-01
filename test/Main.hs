@@ -17,6 +17,7 @@ import Type.Reflection
 import System.Random
 
 import Data.Proxy
+import Data.Word
 
 test1 :: Target Tracer '[5] Float -> Target Tracer '[5] Float -> Target Tracer '[5] Float 
 test1 = (+)
@@ -27,11 +28,6 @@ test3 = (*)
 
 test4 :: Target Tracer '[5] Float -> Target Tracer '[5] Float -> Target Tracer '[5] Float 
 test4 = vmap (+)
--- test5 :: Target Tracer '[5] Float -> Target Tracer '[7] Float -> Target Tracer '[5, 7] Float
--- test5 = prod
--- 
--- test6 :: Target Tracer '[8, 4, 7] Float -> Target Tracer '[4] Float
--- test6 x = reduceAdd x (Proxy :: Proxy '[0, 2])
 
 test5 :: Target Tracer '[5, 3] Float -> Target Tracer '[5, 3] Float -> Target Tracer '[5, 3] Float
 test5 = vmap (\ a b -> 
@@ -100,17 +96,19 @@ test20 x y z =
 
 
 
--- a <+> b as input
-test21 :: (Reverse Tracer [4, 5] Float <+> Reverse Tracer [5, 7] Float) -> Reverse Tracer [4, 7] Float
-test21 (a :+: b) = matmul a b
+-- a <&> b as input
+test21 :: (Reverse Tracer [4, 5] Float <&> Reverse Tracer [5, 7] Float) -> Reverse Tracer [4, 7] Float
+test21 (a :&: b) = matmul a b
 
-test22 :: (Reverse Tracer [4, 5] Float <+> Reverse Tracer [5, 7] Float <+> Reverse Tracer [4, 7] Float) -> Reverse Tracer [4, 7] Float
-test22 (a :+: b :+: c) = (a `matmul` b) + c
+test22 :: (Reverse Tracer [4, 5] Float <&> Reverse Tracer [5, 7] Float <&> Reverse Tracer [4, 7] Float) -> Reverse Tracer [4, 7] Float
+test22 (a :&: b :&: c) = (a `matmul` b) + c
 
+test23 :: Tracer '[5] Float -> Tracer '[5] Float -> Tracer '[5] Float -> Tracer '[5] Float
+test23 x y z = x + z - y
 
-test23 :: Tracer '[5] Float -> Tracer '[] Float -> Tracer '[5] Float -> Tracer '[5] Float
-test23 x y z = x + z
-
+-- branching
+test24 :: Reverse Tracer '[2, 4] Float -> Reverse Tracer '[2, 4] Float -> Reverse Tracer '[] Word8 -> Reverse Tracer '[2, 4] Float
+test24 x y = branch (x - y) (x * y)
 
 main :: IO ()
 main = do 
@@ -172,5 +170,10 @@ main = do
 
   traceDebug test23
 
+  traceDebug test24
+  traceDebugGrad test24
+
+  print ([[Pred 1, Pred 0], [Pred 0, Pred 1]] :: Tensor '[2, 2] Pred)
+  
   clientDestroy client
   return ()
