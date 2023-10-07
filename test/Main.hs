@@ -106,9 +106,18 @@ test22 (a :&: b :&: c) = (a `matmul` b) + c
 test23 :: Tracer '[5] Float -> Tracer '[5] Float -> Tracer '[5] Float -> Tracer '[5] Float
 test23 x y z = x + z - y
 
--- branching
-test24 :: Reverse Tracer '[2, 4] Float -> Reverse Tracer '[2, 4] Float -> Reverse Tracer '[] Word8 -> Reverse Tracer '[2, 4] Float
+-- branching and predicate
+test24 :: Target (Reverse Tracer) '[2, 4] Float -> Target (Reverse Tracer) '[2, 4] Float -> Target (Reverse Tracer) '[] Pred -> Target (Reverse Tracer) '[2, 4] Float
 test24 x y = branch (x - y) (x * y)
+
+test25 :: Tracer '[5, 5] Float -> Tracer '[5, 5] Float -> Tracer '[5, 5] Pred
+test25 = isGT
+
+test26 :: Tracer '[5, 5] Float -> Tracer '[5, 5] Float
+test26 x = select (x + 2) x (x `isGT` 0)
+
+-- Recursion test
+-- TODO: Implement
 
 main :: IO ()
 main = do 
@@ -174,6 +183,11 @@ main = do
   traceDebugGrad test24
 
   print ([[Pred 1, Pred 0], [Pred 0, Pred 1]] :: Tensor '[2, 2] Pred)
+  let t24 = jit test24
+  print $ t24 [[0, 4, 2, 5], [1, -3, -4, -5]] [[0, -1, -5, -3], [4, 2, 5, 6]] 0
+
+  traceDebug test25
+  traceDebug test26
   
   clientDestroy client
   return ()

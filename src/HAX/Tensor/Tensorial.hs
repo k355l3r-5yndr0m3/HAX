@@ -149,6 +149,7 @@ class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseInt
   unitElement :: a  
   nullElement :: a
 
+
 instance Tensorial Float where
   type SHLOType Float = F32Type
   type DenseSplatAttr Float = DenseIntOrFPElements (RankedTensorType NullAttr F32Type) Float
@@ -182,23 +183,21 @@ instance Tensorial Word8 where
   
   unitElement = 1
   nullElement = 1
-newtype Pred = Pred Word8 deriving (Eq, Prim, Storable)
+newtype Pred = Pred Word8 deriving (Num, Eq, Prim, Storable)
 instance Show Pred where 
   show (Pred 0) = "False"
   show _        = "True "
 instance Tensorial Pred where
   type SHLOType Pred = IntegerType
-  type DenseSplatAttr Pred = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Word8
-  type DenseElemsAttr Pred = DenseElementsRawBuffer (RankedTensorType NullAttr IntegerType)
+  type DenseSplatAttr Pred = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Bool
+  type DenseElemsAttr Pred = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) [Bool]
   
   pjrtBufferType _ = pred
   shloTensorType _ = I 1
   staticSizeOf   _ = sizeOf (0 :: Word8)
 
-  denseSplatAttr shape (Pred w) = DenseIntOrFPElements (RankedTensorType shape (I 1) NullAttr) w
-  denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
-    where primArrayToByteArray :: PrimArray a -> ByteArray 
-          primArrayToByteArray (PrimArray a) = ByteArray a
+  denseSplatAttr shape (Pred w) = DenseIntOrFPElements (RankedTensorType shape (I 1) NullAttr) (w > 0)
+  denseElemsAttr shape tensorData = DenseIntOrFPElements (RankedTensorType shape (I 1) NullAttr) ((Pred 0 /=) <$> primArrayToList tensorData)
 
   unitElement = Pred 1
   nullElement = Pred 0
@@ -341,13 +340,19 @@ class ShapeOp r t => MathOp r t where
 
   linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> r '[n] t
 
--- TODO: Change Word8 to Pred
 class Tensorial t => SelectOp r t where
-  branch :: KnownShape s => r s t -> r s t -> r '[] Word8 -> r s t
-  select :: KnownShape s => r s t -> r s t -> r s   Word8 -> r s t
+  branch :: KnownShape s => r s t -> r s t -> r '[] Pred -> r s t
+  select :: KnownShape s => r s t -> r s t -> r s   Pred -> r s t
 
-class Tensorial t => ComparisonOp r t where
-  equality :: KnownShape s => r s t -> r s t -> r s Word8
+class Tensorial t => EqualOp r t where
+  isEQ :: KnownShape s => r s t -> r s t -> r s Pred
+  isNE :: KnownShape s => r s t -> r s t -> r s Pred
+
+class EqualOp r t => OrderOp r t where
+  isGT :: KnownShape s => r s t -> r s t -> r s Pred
+  isGE :: KnownShape s => r s t -> r s t -> r s Pred
+  isLT :: KnownShape s => r s t -> r s t -> r s Pred
+  isLE :: KnownShape s => r s t -> r s t -> r s Pred
 
 (|#|) :: (MathOp a t, TensorProductConstraint l r p) => a l t -> a r t -> a p t
 (|#|) = prod

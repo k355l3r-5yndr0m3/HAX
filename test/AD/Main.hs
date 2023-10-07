@@ -20,13 +20,13 @@ type R = Target (Reverse Tracer)
 test1 :: R '[2, 4] Float -> R '[2, 4] Float -> R '[2, 4] Float -> R '[] Float
 test1 x y z = sigma' $ y * x - z
 
-test2 :: R '[2, 4] Float -> R '[2, 4] Float -> R '[] Word8 -> R '[] Float 
+test2 :: R '[2, 4] Float -> R '[2, 4] Float -> R '[] Pred -> R '[] Float 
 test2 x y = sigma' . branch (x - y) (x * y)
 
-test3 :: R '[2, 2] Float -> R '[2, 2] Word8 -> R '[] Float
+test3 :: R '[2, 2] Float -> R '[2, 2] Pred -> R '[] Float
 test3 x = sigma' . select 0 x
 
-test4 :: R '[4, 2] Float -> R '[4] Word8 -> R '[] Float 
+test4 :: R '[4, 2] Float -> R '[4] Pred -> R '[] Float 
 test4 x = sigma' . vmap (branch 0) x
 
 main :: IO ()

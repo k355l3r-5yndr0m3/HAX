@@ -240,8 +240,8 @@ instance (MathOp r t, ShapeOp r t, Transformable r t) => MathOp (Target r) t whe
   linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> Target r '[n] t
   linspace = Target [] . linspace
 
-instance (SelectOp r t, ShapeOp r t, Transformable r t, ShapeOp r Word8, Transformable r Word8) => SelectOp (Target r) t where
-  branch :: forall s. KnownShape s => Target r s t -> Target r s t -> Target r '[] Word8 -> Target r s t
+instance (SelectOp r t, ShapeOp r t, Transformable r t, ShapeOp r Pred, Transformable r Pred) => SelectOp (Target r) t where
+  branch :: forall s. KnownShape s => Target r s t -> Target r s t -> Target r '[] Pred -> Target r s t
   branch false true (Target [] cond) = Target dims $ 
     reifyShape (dims ++ shape) $ \s ->
       result s
@@ -254,7 +254,7 @@ instance (SelectOp r t, ShapeOp r t, Transformable r t, ShapeOp r Word8, Transfo
             in  coerce $! branch f t cond
   branch false true (broadcast' -> cond) = select false true cond
 
-  select :: forall s. KnownShape s => Target r s t -> Target r s t -> Target r s Word8 -> Target r s t
+  select :: forall s. KnownShape s => Target r s t -> Target r s t -> Target r s Pred -> Target r s t
   select false true cond = Target dims $
     reifyShape (dims ++ shape) $ \s -> 
       result s
@@ -264,8 +264,75 @@ instance (SelectOp r t, ShapeOp r t, Transformable r t, ShapeOp r Word8, Transfo
           result _ = 
             let f :: r s' t     = coerce false'
                 t :: r s' t     = coerce true'
-                c :: r s' Word8 = coerce cond'
-            in  coerce $! select f t c
+            in  coerce $! select f t (coerce cond')
+instance (EqualOp r t, ShapeOp r t, Transformable r t, Transformable r Pred) => EqualOp (Target r) t where
+  isEQ :: forall s. KnownShape s => (Target r) s t -> (Target r) s t -> (Target r) s Pred
+  isEQ lhs rhs = Target dims $ 
+    reifyShape (dims ++ shape) $ \s ->
+      result s
+    where (dims, _lhs, _rhs) = binary lhs rhs
+          shape = shapeVal (Proxy :: Proxy s)
+          result :: forall _s. KnownShape _s => Proxy _s -> r s Pred
+          result _ =
+            let lhs' :: r _s t = coerce _lhs
+                rhs' :: r _s t = coerce _rhs
+            in  coerce $! isEQ lhs' rhs'
+  isNE :: forall s. KnownShape s => (Target r) s t -> (Target r) s t -> (Target r) s Pred
+  isNE lhs rhs = Target dims $ 
+    reifyShape (dims ++ shape) $ \s ->
+      result s
+    where (dims, _lhs, _rhs) = binary lhs rhs
+          shape = shapeVal (Proxy :: Proxy s)
+          result :: forall _s. KnownShape _s => Proxy _s -> r s Pred
+          result _ =
+            let lhs' :: r _s t = coerce _lhs
+                rhs' :: r _s t = coerce _rhs
+            in  coerce $! isNE lhs' rhs'
+instance (OrderOp r t, ShapeOp r t, Transformable r t, Transformable r Pred) => OrderOp (Target r) t where
+  isGT :: forall s. KnownShape s => (Target r) s t -> (Target r) s t -> (Target r) s Pred
+  isGT lhs rhs = Target dims $ 
+    reifyShape (dims ++ shape) $ \s ->
+      result s
+    where (dims, _lhs, _rhs) = binary lhs rhs
+          shape = shapeVal (Proxy :: Proxy s)
+          result :: forall _s. KnownShape _s => Proxy _s -> r s Pred
+          result _ =
+            let lhs' :: r _s t = coerce _lhs
+                rhs' :: r _s t = coerce _rhs
+            in  coerce $! isGT lhs' rhs'
+  isGE :: forall s. KnownShape s => (Target r) s t -> (Target r) s t -> (Target r) s Pred
+  isGE lhs rhs = Target dims $ 
+    reifyShape (dims ++ shape) $ \s ->
+      result s
+    where (dims, _lhs, _rhs) = binary lhs rhs
+          shape = shapeVal (Proxy :: Proxy s)
+          result :: forall _s. KnownShape _s => Proxy _s -> r s Pred
+          result _ =
+            let lhs' :: r _s t = coerce _lhs
+                rhs' :: r _s t = coerce _rhs
+            in  coerce $! isGE lhs' rhs'
+  isLT :: forall s. KnownShape s => (Target r) s t -> (Target r) s t -> (Target r) s Pred
+  isLT lhs rhs = Target dims $ 
+    reifyShape (dims ++ shape) $ \s ->
+      result s
+    where (dims, _lhs, _rhs) = binary lhs rhs
+          shape = shapeVal (Proxy :: Proxy s)
+          result :: forall _s. KnownShape _s => Proxy _s -> r s Pred
+          result _ =
+            let lhs' :: r _s t = coerce _lhs
+                rhs' :: r _s t = coerce _rhs
+            in  coerce $! isLT lhs' rhs'
+  isLE :: forall s. KnownShape s => (Target r) s t -> (Target r) s t -> (Target r) s Pred
+  isLE lhs rhs = Target dims $ 
+    reifyShape (dims ++ shape) $ \s ->
+      result s
+    where (dims, _lhs, _rhs) = binary lhs rhs
+          shape = shapeVal (Proxy :: Proxy s)
+          result :: forall _s. KnownShape _s => Proxy _s -> r s Pred
+          result _ =
+            let lhs' :: r _s t = coerce _lhs
+                rhs' :: r _s t = coerce _rhs
+            in  coerce $! isLE lhs' rhs'
 
 -- VMap transform
 class Vectorizable f where

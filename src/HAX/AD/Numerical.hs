@@ -40,6 +40,11 @@ instance Neighborhood Word8 where
   neighborhood  _   = []
 
   realGradToTensor _ = 0
+instance Neighborhood Pred where
+  neighborhood' _ _ = []
+  neighborhood  _   = []
+
+  realGradToTensor _ = splat (Pred 0)
 
 class NumericalMethod f where
   type NGradFunc g f

@@ -283,19 +283,76 @@ instance (Num t, Tensorial t) => MathOp Tracer t where
     where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
 
 instance Tensorial t => SelectOp Tracer t where
-  branch :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer '[] Word8 -> Tracer s t
+  branch :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer '[] Pred -> Tracer s t
   branch false true cond = mkTracer $ do 
     _false <- sharing false 
     _true  <- sharing true 
-    _cond  <- (retval . (`SHLO._ConvertOp` toAnyType (RankedTensorType [] (I 1) NullAttr))) =<< sharing cond
+    _cond  <- sharing cond
+--    _cond  <- (retval . (`SHLO._ConvertOp` toAnyType (RankedTensorType [] (I 1) NullAttr))) =<< sharing cond
     retval $ SHLO._SelectOp _cond _true _false _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
-  select :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Word8 -> Tracer s t
+  select :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred -> Tracer s t
   select false true cond = mkTracer $ do 
     _false <- sharing false 
     _true  <- sharing true 
-    _cond  <- (retval . (`SHLO._ConvertOp` toAnyType (RankedTensorType shape (I 1) NullAttr))) =<< sharing cond
+    _cond  <- sharing cond
+--    _cond  <- (retval . (`SHLO._ConvertOp` toAnyType (RankedTensorType shape (I 1) NullAttr))) =<< sharing cond
     retval $ SHLO._SelectOp _cond _true _false _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-          shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+          -- shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+
+class Tensorial t => EqualOpTracer t where
+  comparisonType :: Proxy t -> ComparisonTypeAttr
+instance EqualOpTracer Float where
+  comparisonType _ = ComparisonTypeFloat
+instance EqualOpTracer Word8 where
+  comparisonType _ = ComparisonTypeUnsigned
+instance EqualOpTracer Pred where
+  comparisonType _ = ComparisonTypeUnsigned
+
+instance EqualOpTracer t => EqualOp Tracer t where
+  isEQ :: forall s. (KnownShape s, EqualOpTracer t) => Tracer s t -> Tracer s t -> Tracer s Pred
+  isEQ lhs rhs = mkTracer $ do
+    _lhs <- sharing lhs
+    _rhs <- sharing rhs
+    retval $ SHLO._CompareOp ComparisonDirectionEQ (Just ct) _lhs _rhs tt
+    where ct = comparisonType (Proxy :: Proxy t)
+          tt = tensorType' (Proxy :: Proxy (Tracer s Pred))
+  isNE :: forall s. (KnownShape s, EqualOpTracer t) => Tracer s t -> Tracer s t -> Tracer s Pred
+  isNE lhs rhs = mkTracer $ do
+    _lhs <- sharing lhs
+    _rhs <- sharing rhs
+    retval $ SHLO._CompareOp ComparisonDirectionNE (Just ct) _lhs _rhs tt
+    where ct = comparisonType (Proxy :: Proxy t)
+          tt = tensorType' (Proxy :: Proxy (Tracer s Pred))
+
+instance EqualOpTracer t => OrderOp Tracer t where
+  isGT :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred
+  isGT lhs rhs = mkTracer $ do
+    _lhs <- sharing lhs
+    _rhs <- sharing rhs
+    retval $ SHLO._CompareOp ComparisonDirectionGT (Just ctype) _lhs _rhs _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s Pred))
+          ctype = comparisonType (Proxy :: Proxy t)
+  isGE :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred
+  isGE lhs rhs = mkTracer $ do
+    _lhs <- sharing lhs
+    _rhs <- sharing rhs
+    retval $ SHLO._CompareOp ComparisonDirectionGE (Just ctype) _lhs _rhs _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s Pred))
+          ctype = comparisonType (Proxy :: Proxy t)
+  isLT :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred
+  isLT lhs rhs = mkTracer $ do
+    _lhs <- sharing lhs
+    _rhs <- sharing rhs
+    retval $ SHLO._CompareOp ComparisonDirectionLT (Just ctype) _lhs _rhs _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s Pred))
+          ctype = comparisonType (Proxy :: Proxy t)
+  isLE :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred
+  isLE lhs rhs = mkTracer $ do
+    _lhs <- sharing lhs
+    _rhs <- sharing rhs
+    retval $ SHLO._CompareOp ComparisonDirectionLE (Just ctype) _lhs _rhs _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s Pred))
+          ctype = comparisonType (Proxy :: Proxy t)
