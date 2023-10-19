@@ -2,6 +2,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 module HAX.AD.Reverse where
 import HAX.Tensor.Tensorial
 
@@ -100,15 +101,22 @@ differentiableUnsafeTranspose (Reverse (f, f')) perm =
     let perm' = map snd $ sortOn fst $ zip perm [0..] 
     in  f' (unsafeTranspose i perm'))
 
+differentiableUnsafeReshape :: forall r t s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => Reverse r s0 t -> Reverse r s1 t
+differentiableUnsafeReshape (Reverse (f, f')) = Reverse (unsafeReshape f, f' . unsafeReshape)
+
 instance (ShapeOp r Float, MathOp r Float) => ShapeOp (Reverse r) Float where
   splat i = Reverse (splat i, const zero)
   unsafeBroadcast = differentiableUnsafeBroadcast
   unsafeTranspose = differentiableUnsafeTranspose
+  unsafeReshape   = differentiableUnsafeReshape
 
+indifferentiable :: Reverse r s t -> (r s t -> r s' t) -> Reverse r s' t
+indifferentiable (Reverse (f, _)) y = Reverse (y f, const zero)
 instance {-# OVERLAPPABLE #-} ShapeOp r t => ShapeOp (Reverse r) t where
-  unsafeBroadcast (Reverse (f, _)) _map = Reverse (unsafeBroadcast f _map, const zero)
-  unsafeTranspose (Reverse (f, _)) perm = Reverse (unsafeTranspose f perm, const zero)
   splat i = Reverse (splat i, const zero)
+  unsafeBroadcast x _map = indifferentiable x (`unsafeBroadcast` _map)
+  unsafeTranspose x perm = indifferentiable x (`unsafeTranspose` perm)
+  unsafeReshape   x      = indifferentiable x unsafeReshape
 
 -- MathOp
 differentiableUnsafeReduceMul :: forall r t s0 s1. (ShapeOp r t, MathOp r t, Fractional (r s0 t), Num (r s1 t), T s0 t, T s1 t, Num t) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
@@ -186,17 +194,33 @@ differentiableUnsafeDotGeneral (Reverse (f, f')) (Reverse (g, g')) attr =
         p0 :: Proxy s0 = Proxy
         p1 :: Proxy s1 = Proxy
 
+differentiableUnsafeConvolution :: forall s0 s1 s2 r t. (KnownShape s0, KnownShape s1, KnownShape s2, MathOp r t, forall s. KnownShape s => Fractional (r s Float)) => Reverse r s0 t -> Reverse r s1 t -> ConvBatchingDimInfo -> [ConvSpatialDimInfo] -> ConvFeaturesDimInfo -> Reverse r s2 t
+differentiableUnsafeConvolution (Reverse (f, f')) (Reverse (g, g')) batching spatial features = Reverse (unsafeConvolution f g batching spatial features, \i -> kernelGradient i <+> inputGradient i)
+  where kernelGradient i = 
+          let 
+          in  undefined
+        inputGradient  i =
+          let paddedOutputShape = undefined
+          in  undefined
+        kernelShape = shapeVal (Proxy :: Proxy s1)
+        inputShape  = shapeVal (Proxy :: Proxy s0)
+        outputShape = shapeVal (Proxy :: Proxy s2)
+        rhsDilation = [ (d.kernelDim, d.rhsDilation) | d <- spatial ]
+        lhsDilation = [ (d.inputDim , d.lhsDilation) | d <- spatial ]
+
 instance (MathOp r Float, forall s. KnownShape s => Fractional (r s Float)) => MathOp (Reverse r) Float where
   linspace r = Reverse (linspace r, const zero)
   unsafeReduceMul = differentiableUnsafeReduceMul
   unsafeReduceAdd = differentiableUnsafeReduceAdd
   unsafeDotGeneral = differentiableUnsafeDotGeneral
+  unsafeConvolution = differentiableUnsafeConvolution
 
 instance {-# OVERLAPPABLE #-} MathOp r t => MathOp (Reverse r) t where
   linspace r = Reverse (linspace r, const zero)
   unsafeReduceMul (Reverse (f, _)) dims = Reverse (unsafeReduceMul f dims, const zero)
   unsafeReduceAdd (Reverse (f, _)) dims = Reverse (unsafeReduceAdd f dims, const zero)
   unsafeDotGeneral (Reverse (f, _)) (Reverse (g, _)) attr = Reverse (unsafeDotGeneral f g attr, const zero)
+  unsafeConvolution (Reverse (lhs, _)) (Reverse (rhs, _)) batching spatial features = Reverse (unsafeConvolution lhs rhs batching spatial features, const zero)
 
 -- SelectOp
 differentiableBranch :: forall r t s. (SelectOp r t, T s t, Num (r s t)) => Reverse r s t -> Reverse r s t -> Reverse r '[] Pred -> Reverse r s t

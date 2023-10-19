@@ -72,5 +72,6 @@ type family JitResult f where
   JitResult a         = JitTransform a
 
 {-# NOINLINE jit #-}
-jit :: forall a b f f'. (Traceable f, Jit f', f' ~ JitResult f, f ~ (a -> b)) => f -> f' 
+type J f f' = (Traceable f, Jit f', f' ~ JitResult f)
+jit :: (J f f', f ~ (a -> b)) => f -> f' 
 jit f = jit' (Annotated [] :: Annotated [Buffer] f', compile f)

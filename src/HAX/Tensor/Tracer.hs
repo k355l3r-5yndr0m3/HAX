@@ -2,6 +2,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 module HAX.Tensor.Tracer where
 import Prelude hiding (lookup)
 
@@ -238,6 +239,12 @@ instance Tensorial t => ShapeOp Tracer t where
             in  uniqueness perm && resultShape == map ((operandShape !!) . fromInteger) perm
           attr = TransposePerm (fromInteger <$> perm)
 
+  unsafeReshape :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> Tracer s1 t
+  unsafeReshape operand = assert correctness $ mkTracer $ do 
+    _operand <- sharing operand
+    retval $ SHLO._ReshapeOp _operand _type
+    where correctness = product (shapeVal (Proxy :: Proxy s0)) == product (shapeVal (Proxy :: Proxy s1))
+          _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
 
   splat :: forall s. T s t => t -> Tracer s t
   splat value = mkTracer $ do 
@@ -281,6 +288,32 @@ instance (Num t, Tensorial t) => MathOp Tracer t where
     _rhs <- sharing rhs 
     retval $ SHLO._DotGeneralOp attr Nothing _lhs _rhs _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+
+  unsafeConvolution :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 t -> ConvBatchingDimInfo -> [ConvSpatialDimInfo] -> ConvFeaturesDimInfo -> Tracer s2 t
+  unsafeConvolution lhs rhs batching spatial features = mkTracer $ do 
+    _lhs <- sharing lhs 
+    _rhs <- sharing rhs
+    retval $ SHLO._ConvolutionOp (Just winStride) (Just padding) (Just lhsDilation) (Just rhsDilation) 
+                                 (Nothing :: Maybe (DenseIntOrFPElements (VectorType IntegerType) Bool)) 
+                                 attr (IntegerAttr SI64 1) (IntegerAttr SI64 1) Nothing _lhs _rhs _type
+    where attr = ConvDimensionNumbersAttr {
+            inputBatchDim = fromInteger batching.inputBatchingDim,
+            inputFeatDim  = fromInteger features.inputFeaturesDim,
+            inputSpatDims = [fromInteger d.inputDim | d <- spatial],
+            
+            kernelInputFeatDim  = fromInteger features.kernelInputFeaturesDim,
+            kernelOutputFeatDim = fromInteger features.kernelOutputFeaturesDim,
+            kernelSpatDims      = [fromInteger d.kernelDim | d <- spatial],
+            
+            outputBatchDim = fromInteger batching.outputBatchingDim,
+            outputFeatDim  = fromInteger features.outputFeaturesDim,
+            outputSpatDims = [fromIntegral d.outputDim | d <- spatial]
+          }
+          winStride   = DenseIntOrFPElements (VectorType [fromIntegral $ length spatial] SI64) [fromIntegral d.windowStride :: Int64 | d <- spatial]
+          padding     = DenseIntOrFPElements (VectorType [fromIntegral $ length spatial, 2] SI64) (0 :: Int64) 
+          lhsDilation = DenseIntOrFPElements (VectorType [fromIntegral $ length spatial] SI64) [fromIntegral d.lhsDilation  :: Int64 | d <- spatial] 
+          rhsDilation = DenseIntOrFPElements (VectorType [fromIntegral $ length spatial] SI64) [fromIntegral d.rhsDilation  :: Int64 | d <- spatial] 
+          _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
 
 instance Tensorial t => SelectOp Tracer t where
   branch :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer '[] Pred -> Tracer s t

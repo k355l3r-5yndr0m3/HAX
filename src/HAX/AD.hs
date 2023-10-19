@@ -9,7 +9,6 @@ import HAX.Jit
 
 import HAX.Tensor.Tensorial
 import HAX.AD.Reverse as Reverse
-import HAX.AD.Numerical as Numerical
 
 traceDebugGrad :: (Rev (GradResult f) f ~ (a -> b), Traceable (a -> b), ReverseMode f) => f -> IO ()
 traceDebugGrad x = traceDebug $ rgrad x

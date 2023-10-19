@@ -183,6 +183,16 @@ instance (Tensorial t, ShapeOp r t, Transformable r t) => ShapeOp (Target r) t w
             in  coerce $! t1
           perm' = [0..fromIntegral (length dim - 1)] ++ map (+ (fromIntegral $ length dim)) perm
 
+  unsafeReshape :: forall s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => Target r s0 t -> Target r s1 t
+  unsafeReshape (Target dim operand) = Target dim $
+    reifyShape (dim ++ shapeVal (Proxy :: Proxy s0)) $ \s0 ->
+      reifyShape (dim ++ shapeVal (Proxy :: Proxy s1)) $ \s1 ->
+        result s0 s1
+    where result :: forall z0 z1. (KnownShape z0, KnownShape z1) => Proxy z0 -> Proxy z1 -> r s1 t
+          result _ _ =
+            let operand' :: r z0 t = coerce operand
+            in  coerce $! (unsafeReshape operand' :: r z1 t)
+
   splat = Target [] . splat
 
 instance (MathOp r t, ShapeOp r t, Transformable r t) => MathOp (Target r) t where

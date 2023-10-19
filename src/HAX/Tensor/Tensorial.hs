@@ -7,6 +7,7 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
 {-# LANGUAGE GeneralisedNewtypeDeriving #-}
+{-# LANGUAGE NoStarIsType #-}
 module HAX.Tensor.Tensorial where
 import Prelude hiding (pred)
 import HAX.PjRt.BufferType
@@ -128,6 +129,10 @@ type family TransposeImpl (operand :: Shape) (perm :: Shape) :: Shape where
 
 type Transpose operand perm result = (SameLength operand perm (TypeError (ShowType operand :<>: Text " must be the same length as " :<>: ShowType perm)), 
                                       result ~ TransposeImpl operand perm, KnownShape perm, KnownShape operand, KnownShape result)
+type family Product (a :: Shape) :: Natural where
+  Product '[]       = 1
+  Product (a ': as) = a * Product as
+type Reshapable operand result = (Product operand ~ Product result)
 
 -- Tensorial
 class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
@@ -287,12 +292,17 @@ tensorType _ = RankedTensorType shape _type NullAttr
 tensorType' :: T s t => Proxy (a s t) -> AnyType 
 tensorType' = toAnyType . tensorType
 
+
 class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
   -- without type checking, internal use only
   -- it is easy to detach type from reality
-  unsafeBroadcast  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
-  unsafeTranspose  :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
+  unsafeBroadcast   :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
+  unsafeTranspose   :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
+  unsafeReshape     :: (KnownShape s0, KnownShape s1) => a s0 t -> a s1 t 
+  unsafeSlice       :: (KnownShape s0, KnownShape s1) => a s0 t -> [(Integer, Integer, Integer)] -> a s1 t
+  unsafePad         :: (KnownShape s0, KnownShape s1) => a s0 t -> [(Integer, Integer, Integer)] -> a s1 t
 
+  -- With type checking
   broadcast :: Broadcast org map targ => a org t -> Proxy map -> a targ t
   broadcast operand (shapeVal -> _map) = unsafeBroadcast operand _map
 
@@ -305,12 +315,26 @@ class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
   transpose :: Transpose operand perm result => a operand t -> Proxy perm -> a result t
   transpose operand = unsafeTranspose operand . shapeVal
 
+  reshape :: (KnownShape s0, KnownShape s1, Reshapable s0 s1) => a s0 t -> a s1 t
+  reshape = unsafeReshape
+
+  -- TODO: Move this to a different class
   splat :: (KnownShape s) => t -> a s t
 
+-- Consider making Num a superclass
+--    since all of these function do either addition or multiplication in complex way
+data ConvSpatialDimInfo  = ConvSpatialDimInfo  { windowStride     :: Integer, lhsDilation :: Integer, rhsDilation :: Integer, inputDim :: Integer, kernelDim :: Integer, outputDim :: Integer }
+data ConvBatchingDimInfo = ConvBatchingDimInfo { inputBatchingDim :: Integer, outputBatchingDim :: Integer }
+data ConvFeaturesDimInfo = ConvFeaturesDimInfo { inputFeaturesDim :: Integer, kernelInputFeaturesDim :: Integer, kernelOutputFeaturesDim :: Integer, outputFeaturesDim :: Integer }
+-- The lhs (image, or volume, or whatever) is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
+--     rhs (kernel)                        is [IN FEAT DIM, ...(SPATIAL DIM)..., OUT FEAT DIM] 
+--     output                              is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
+
 class ShapeOp r t => MathOp r t where
-  unsafeDotGeneral :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> DotDimensionNumbersAttr -> r s2 t
-  unsafeReduceAdd  :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
-  unsafeReduceMul  :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
+  unsafeDotGeneral  :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> DotDimensionNumbersAttr -> r s2 t
+  unsafeReduceAdd   :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
+  unsafeReduceMul   :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
+  unsafeConvolution :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> ConvBatchingDimInfo -> [ConvSpatialDimInfo] -> ConvFeaturesDimInfo -> r s2 t
 
   linearMap :: (KnownNat i, KnownNat o) => r '[i, o] t -> r '[i] t -> r '[o] t 
   linearMap mat vec = unsafeDotGeneral mat vec dotAttr 
@@ -338,6 +362,7 @@ class ShapeOp r t => MathOp r t where
   matmul lhs rhs = unsafeDotGeneral lhs rhs attr
     where attr = DotDimensionNumbersAttr { getContractingDims = [(1, 0)], getBatchingDims = [] }
 
+  -- TODO: Move this to a different class
   linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> r '[n] t
 
 class Tensorial t => SelectOp r t where
@@ -363,8 +388,17 @@ infixl 9 |#|
 infixl 8 |@|
 
 -- TODO: Add conditional
-relu :: Fractional a => a -> a
-relu x = x * ((signum x + 1) / 2)
+relu :: (SelectOp r t, KnownShape s, Num (r s t), OrderOp r t) => r s t -> r s t
+relu x = select 0 x (x `isGT` 0)
+
+leakyrelu :: (Num (r s t), SelectOp r t, KnownShape s, OrderOp r t, ShapeOp r t) => r '[] t -> r s t -> r s t
+leakyrelu alpha = leakyrelu' $ broadcast alpha (Proxy :: Proxy '[])
+
+leakyrelu' :: (Num (r s t), SelectOp r t, KnownShape s, OrderOp r t) => r s t -> r s t -> r s t
+leakyrelu' alpha x = x * select alpha 1 (x `isGT` 0)
 
 l2Loss :: (MathOp a t, KnownShape s, Num t, Num (a s t)) => a s t -> a '[] t
 l2Loss x = sigma' $ x * x 
+
+sigmoid :: Floating a => a -> a
+sigmoid x = recip (1 + exp (negate x))
