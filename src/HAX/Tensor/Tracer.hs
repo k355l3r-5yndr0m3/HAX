@@ -2,7 +2,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 module HAX.Tensor.Tracer where
 import Prelude hiding (lookup)
 
@@ -240,18 +239,49 @@ instance Tensorial t => ShapeOp Tracer t where
           attr = TransposePerm (fromInteger <$> perm)
 
   unsafeReshape :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> Tracer s1 t
-  unsafeReshape operand = assert correctness $ mkTracer $ do 
+  unsafeReshape operand = assert correctness $ mkTracer $ do
     _operand <- sharing operand
-    retval $ SHLO._ReshapeOp _operand _type
+    if operandShape == resultShape then 
+      return _operand 
+    else
+      retval $ SHLO._ReshapeOp _operand _type
     where correctness = product (shapeVal (Proxy :: Proxy s0)) == product (shapeVal (Proxy :: Proxy s1))
           _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+          operandShape = shapeVal (Proxy :: Proxy s0)
+          resultShape  = shapeVal (Proxy :: Proxy s1)
+
+  unsafeSlice :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
+  unsafeSlice operand slicing = mkTracer $ do
+    _operand <- sharing operand
+    retval $ SHLO._SliceOp (mkVec starts) (mkVec limits) (mkVec strides) _operand _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+          (starts, limits, strides) = unzip3 slicing
+          mkVec :: [Integer] -> DenseIntOrFPElements (VectorType IntegerType) [Int64]
+          mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] SI64) (fromIntegral <$> vec)
+
+  unsafePad :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
+  unsafePad operand padding = mkTracer $ do
+    _operand <- sharing operand 
+    _value   <- sharing value
+    retval $ SHLO._PadOp (mkVec lower) (mkVec higher) (mkVec interior) _operand _value _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+          (lower, higher, interior) = unzip3 padding
+          mkVec :: [Integer] -> DenseIntOrFPElements (VectorType IntegerType) [Int64]
+          mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] SI64) (fromIntegral <$> vec)
+          value :: Tracer s0 t = splat nullElement
+
+  unsafeReverse :: forall s0. (KnownShape s0) => Tracer s0 t -> [Integer] -> Tracer s0 t
+  unsafeReverse operand dims = mkTracer $ do
+    _operand <- sharing operand 
+    retval $ SHLO._ReverseOp dims' _operand _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s0 t))
+          dims' = DenseIntOrFPElements (VectorType [fromIntegral $ length dims] SI64) (fromInteger <$> dims :: [Int64])
 
   splat :: forall s. T s t => t -> Tracer s t
   splat value = mkTracer $ do 
     retval $ SHLO._ConstantOp (denseSplatAttr shape value) _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
           shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
-  
 
 instance (Num t, Tensorial t) => MathOp Tracer t where
   -- TODO: Implement a better linspace
@@ -289,31 +319,29 @@ instance (Num t, Tensorial t) => MathOp Tracer t where
     retval $ SHLO._DotGeneralOp attr Nothing _lhs _rhs _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
 
-  unsafeConvolution :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 t -> ConvBatchingDimInfo -> [ConvSpatialDimInfo] -> ConvFeaturesDimInfo -> Tracer s2 t
-  unsafeConvolution lhs rhs batching spatial features = mkTracer $ do 
+  -- TODO: Add error detection
+  unsafeConvolution :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 t -> Tracer s2 t
+  unsafeConvolution lhs rhs = mkTracer $ do 
     _lhs <- sharing lhs 
     _rhs <- sharing rhs
-    retval $ SHLO._ConvolutionOp (Just winStride) (Just padding) (Just lhsDilation) (Just rhsDilation) 
+    retval $ SHLO._ConvolutionOp nothing nothing nothing nothing 
                                  (Nothing :: Maybe (DenseIntOrFPElements (VectorType IntegerType) Bool)) 
                                  attr (IntegerAttr SI64 1) (IntegerAttr SI64 1) Nothing _lhs _rhs _type
     where attr = ConvDimensionNumbersAttr {
-            inputBatchDim = fromInteger batching.inputBatchingDim,
-            inputFeatDim  = fromInteger features.inputFeaturesDim,
-            inputSpatDims = [fromInteger d.inputDim | d <- spatial],
+            inputBatchDim = undefined,
+            inputFeatDim  = undefined,
+            inputSpatDims = undefined,
             
-            kernelInputFeatDim  = fromInteger features.kernelInputFeaturesDim,
-            kernelOutputFeatDim = fromInteger features.kernelOutputFeaturesDim,
-            kernelSpatDims      = [fromInteger d.kernelDim | d <- spatial],
+            kernelInputFeatDim  = undefined,
+            kernelOutputFeatDim = undefined,
+            kernelSpatDims      = undefined,
             
-            outputBatchDim = fromInteger batching.outputBatchingDim,
-            outputFeatDim  = fromInteger features.outputFeaturesDim,
-            outputSpatDims = [fromIntegral d.outputDim | d <- spatial]
+            outputBatchDim = undefined,
+            outputFeatDim  = undefined,
+            outputSpatDims = undefined
           }
-          winStride   = DenseIntOrFPElements (VectorType [fromIntegral $ length spatial] SI64) [fromIntegral d.windowStride :: Int64 | d <- spatial]
-          padding     = DenseIntOrFPElements (VectorType [fromIntegral $ length spatial, 2] SI64) (0 :: Int64) 
-          lhsDilation = DenseIntOrFPElements (VectorType [fromIntegral $ length spatial] SI64) [fromIntegral d.lhsDilation  :: Int64 | d <- spatial] 
-          rhsDilation = DenseIntOrFPElements (VectorType [fromIntegral $ length spatial] SI64) [fromIntegral d.rhsDilation  :: Int64 | d <- spatial] 
           _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+          nothing :: Maybe (DenseIntOrFPElements (VectorType IntegerType) [Int64]) = Nothing
 
 instance Tensorial t => SelectOp Tracer t where
   branch :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer '[] Pred -> Tracer s t

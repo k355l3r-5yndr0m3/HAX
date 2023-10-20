@@ -2,8 +2,8 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 module HAX.AD.Reverse where
+import Prelude hiding (reverse)
 import HAX.Tensor.Tensorial
 
 import HAX.AD.Gradient
@@ -12,7 +12,7 @@ import HAX.Utils
 import Control.Exception
 
 import Data.Proxy
-import Data.List
+import Data.List hiding (reverse)
 
 import Foreign.C
 
@@ -104,19 +104,42 @@ differentiableUnsafeTranspose (Reverse (f, f')) perm =
 differentiableUnsafeReshape :: forall r t s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => Reverse r s0 t -> Reverse r s1 t
 differentiableUnsafeReshape (Reverse (f, f')) = Reverse (unsafeReshape f, f' . unsafeReshape)
 
+differentiableUnsafeSlice :: forall r t s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => Reverse r s0 t -> [(Integer, Integer, Integer)] -> Reverse r s1 t
+differentiableUnsafeSlice (Reverse (f, f')) slicing = Reverse (unsafeSlice f slicing, \i ->
+  let (starts, _, strides) = unzip3 slicing
+      interior = fmap (+(-1)) strides
+      higher   = zipWith4 (\low sh st tot -> tot - low - (sh - 1) * st - 1) starts (shapeVal (Proxy :: Proxy s0)) strides (shapeVal (Proxy :: Proxy s1))
+  in  f' $ unsafePad i (zip3 starts higher interior))
+
+differentiableUnsafePad :: forall r t s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => Reverse r s0 t -> [(Integer, Integer, Integer)] -> Reverse r s1 t
+differentiableUnsafePad (Reverse (f, f')) padding = Reverse (unsafePad f padding, \i -> 
+  let (low, high, internal) = unzip3 padding
+      slicing = zipWith4 (\l h a j -> (l, a - h, j + 1)) low high s internal
+      s = shapeVal (Proxy :: Proxy s1)
+  in  f' $ unsafeSlice i slicing)
+
+differentiableUnsafeReverse :: forall s0 t r. (ShapeOp r t, KnownShape s0) => Reverse r s0 t -> [Integer] -> Reverse r s0 t
+differentiableUnsafeReverse (Reverse (f, f')) dims = Reverse (unsafeReverse f dims, \i -> f' $ unsafeReverse i dims)
+
 instance (ShapeOp r Float, MathOp r Float) => ShapeOp (Reverse r) Float where
   splat i = Reverse (splat i, const zero)
   unsafeBroadcast = differentiableUnsafeBroadcast
   unsafeTranspose = differentiableUnsafeTranspose
   unsafeReshape   = differentiableUnsafeReshape
+  unsafeSlice     = differentiableUnsafeSlice
+  unsafePad       = differentiableUnsafePad
+  unsafeReverse   = differentiableUnsafeReverse
 
 indifferentiable :: Reverse r s t -> (r s t -> r s' t) -> Reverse r s' t
 indifferentiable (Reverse (f, _)) y = Reverse (y f, const zero)
 instance {-# OVERLAPPABLE #-} ShapeOp r t => ShapeOp (Reverse r) t where
   splat i = Reverse (splat i, const zero)
-  unsafeBroadcast x _map = indifferentiable x (`unsafeBroadcast` _map)
-  unsafeTranspose x perm = indifferentiable x (`unsafeTranspose` perm)
-  unsafeReshape   x      = indifferentiable x unsafeReshape
+  unsafeBroadcast x _map    = indifferentiable x (`unsafeBroadcast` _map)
+  unsafeTranspose x perm    = indifferentiable x (`unsafeTranspose` perm)
+  unsafeReshape   x         = indifferentiable x unsafeReshape
+  unsafeSlice     x slicing = indifferentiable x (`unsafeSlice` slicing)
+  unsafePad       x padding = indifferentiable x (`unsafePad` padding)
+  unsafeReverse   x dims    = indifferentiable x (`unsafeReverse` dims)
 
 -- MathOp
 differentiableUnsafeReduceMul :: forall r t s0 s1. (ShapeOp r t, MathOp r t, Fractional (r s0 t), Num (r s1 t), T s0 t, T s1 t, Num t) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
@@ -194,19 +217,35 @@ differentiableUnsafeDotGeneral (Reverse (f, f')) (Reverse (g, g')) attr =
         p0 :: Proxy s0 = Proxy
         p1 :: Proxy s1 = Proxy
 
-differentiableUnsafeConvolution :: forall s0 s1 s2 r t. (KnownShape s0, KnownShape s1, KnownShape s2, MathOp r t, forall s. KnownShape s => Fractional (r s Float)) => Reverse r s0 t -> Reverse r s1 t -> ConvBatchingDimInfo -> [ConvSpatialDimInfo] -> ConvFeaturesDimInfo -> Reverse r s2 t
-differentiableUnsafeConvolution (Reverse (f, f')) (Reverse (g, g')) batching spatial features = Reverse (unsafeConvolution f g batching spatial features, \i -> kernelGradient i <+> inputGradient i)
-  where kernelGradient i = 
-          let 
-          in  undefined
-        inputGradient  i =
-          let paddedOutputShape = undefined
-          in  undefined
-        kernelShape = shapeVal (Proxy :: Proxy s1)
-        inputShape  = shapeVal (Proxy :: Proxy s0)
-        outputShape = shapeVal (Proxy :: Proxy s2)
-        rhsDilation = [ (d.kernelDim, d.rhsDilation) | d <- spatial ]
-        lhsDilation = [ (d.inputDim , d.lhsDilation) | d <- spatial ]
+differentiableUnsafeConvolution :: forall s0 s1 s2 r t. (KnownShape s0, KnownShape s1, KnownShape s2, MathOp r t, forall s. KnownShape s => Fractional (r s Float)) => Reverse r s0 t -> Reverse r s1 t -> Reverse r s2 t
+differentiableUnsafeConvolution (Reverse (f, f')) (Reverse (g, g')) = Reverse (unsafeConvolution f g, \i -> f' (inputGradient i) <+> g' (kernelGradient i))
+  where inputGradient :: r s2 t -> r s0 t
+        inputGradient i = 
+          let result :: forall rotkern padshape. (KnownShape rotkern, KnownShape padshape) => Proxy rotkern -> Proxy padshape -> r s0 t
+              result _ _ = 
+                let rkernel :: r rotkern t = unsafeTranspose (unsafeReverse g spatials) (rotate dims)
+                    expad = fmap (+(-1)) kerShape
+                    inpad = fmap (+(-1)) (middle outShape)
+                    padder = (0, 0, 0):zipWith (\a b -> (a, b, a)) expad inpad ++ [(0, 0, 0)]
+                    padded :: r padshape t = unsafePad i padder
+                in  unsafeConvolution rkernel padded
+              padShape = zipWith (\a b -> (a - 1) * 2 + b) kerShape (middle outShape)
+          in  reifyShape padShape $ reifyShape (rotate rhsShape) result
+        kernelGradient :: r s2 t -> r s1 t
+        kernelGradient i =
+          let result :: forall rotinput. (KnownShape rotinput) => Proxy rotinput -> r s1 t
+              result _ =
+                let rotinput :: r rotinput t = unsafeTranspose f (rotate dims)
+                in  unsafeConvolution rotinput i
+          in  reifyShape (rotate lhsShape) result
+        lhsShape = shapeVal (Proxy :: Proxy s0)
+        rhsShape = shapeVal (Proxy :: Proxy s1)
+        outShape = shapeVal (Proxy :: Proxy s2)
+        kerShape = middle rhsShape
+        rotate s = last s:middle s ++ [head s]
+        middle s = init $ tail s
+        spatials = [1..fromIntegral $ length rhsShape - 2]
+        dims     = [0..fromIntegral $ length rhsShape - 1]
 
 instance (MathOp r Float, forall s. KnownShape s => Fractional (r s Float)) => MathOp (Reverse r) Float where
   linspace r = Reverse (linspace r, const zero)
@@ -220,7 +259,7 @@ instance {-# OVERLAPPABLE #-} MathOp r t => MathOp (Reverse r) t where
   unsafeReduceMul (Reverse (f, _)) dims = Reverse (unsafeReduceMul f dims, const zero)
   unsafeReduceAdd (Reverse (f, _)) dims = Reverse (unsafeReduceAdd f dims, const zero)
   unsafeDotGeneral (Reverse (f, _)) (Reverse (g, _)) attr = Reverse (unsafeDotGeneral f g attr, const zero)
-  unsafeConvolution (Reverse (lhs, _)) (Reverse (rhs, _)) batching spatial features = Reverse (unsafeConvolution lhs rhs batching spatial features, const zero)
+  unsafeConvolution (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (unsafeConvolution lhs rhs, const zero)
 
 -- SelectOp
 differentiableBranch :: forall r t s. (SelectOp r t, T s t, Num (r s t)) => Reverse r s t -> Reverse r s t -> Reverse r '[] Pred -> Reverse r s t

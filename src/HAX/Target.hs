@@ -6,7 +6,7 @@
 module HAX.Target where
 -- import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
-import HAX.Tensor.Tensor
+import HAX.Tensor.Tensor (Tensor)
 
 import HAX.AD.Gradient
 import HAX.AD.Reverse
@@ -21,7 +21,6 @@ import Data.Proxy
 import Data.List
 import Data.Functor
 import Data.Bifunctor
-import Data.Word
 
 import Stablehlo.Dialect.Stablehlo.Attributes
 
@@ -30,6 +29,8 @@ import GHC.TypeLits
 -- Target: represent the target of vmap transformation
 --         Target dims r 
 --         dims ++ shapeVal r is the true shape
+-- TODO: Implement an entire unsafe version of Target without dimension,
+--       simplify the impementation
 
 -- Target dim tracer
 -- NOTE: The true shape of Tracer is 
@@ -193,6 +194,40 @@ instance (Tensorial t, ShapeOp r t, Transformable r t) => ShapeOp (Target r) t w
             let operand' :: r z0 t = coerce operand
             in  coerce $! (unsafeReshape operand' :: r z1 t)
 
+  unsafeSlice :: forall s0 s1. (KnownShape s0, KnownShape s1) => Target r s0 t -> [(Integer, Integer, Integer)] -> Target r s1 t
+  unsafeSlice (Target dims operand) slicing = Target dims $ 
+    reifyShape (dims ++ shapeVal (Proxy :: Proxy s0)) $ 
+      reifyShape (dims ++ shapeVal (Proxy :: Proxy s1))
+        result 
+    where result :: forall s0' s1'. (KnownShape s0', KnownShape s1') => Proxy s1' -> Proxy s0' -> r s1 t
+          result _ _ = 
+            let _operand :: r s0' t = coerce operand
+                _result  :: r s1' t = unsafeSlice _operand slicing'
+            in  coerce $! _result
+          slicing' = fmap (0, , 1) dims ++ slicing
+
+  unsafePad :: forall s0 s1. (KnownShape s0, KnownShape s1) => Target r s0 t -> [(Integer, Integer, Integer)] -> Target r s1 t
+  unsafePad (Target dims operand) padding = Target dims $ 
+    reifyShape (dims ++ shapeVal (Proxy :: Proxy s0)) $ 
+      reifyShape (dims ++ shapeVal (Proxy :: Proxy s1))
+        result 
+    where result :: forall s0' s1'. (KnownShape s0', KnownShape s1') => Proxy s1' -> Proxy s0' -> r s1 t
+          result _ _ = 
+            let _operand :: r s0' t = coerce operand
+                _result  :: r s1' t = unsafePad _operand padding'
+            in  coerce $! _result
+          padding' = ((0, 0, 0) <$ dims) ++ padding
+
+  unsafeReverse :: forall s0. (KnownShape s0) => Target r s0 t -> [Integer] -> Target r s0 t
+  unsafeReverse (Target dims operand) reverseDims = Target dims $ 
+    reifyShape (dims ++ shapeVal (Proxy :: Proxy s0)) result
+    where result :: forall s0'. KnownShape s0' => Proxy s0' -> r s0 t
+          result _ =
+            let _operand :: r s0' t = coerce operand
+                _result  :: r s0' t = unsafeReverse _operand ((+offset) <$> reverseDims)
+            in  undefined
+          offset = fromIntegral $ length dims
+
   splat = Target [] . splat
 
 instance (MathOp r t, ShapeOp r t, Transformable r t) => MathOp (Target r) t where
@@ -246,6 +281,30 @@ instance (MathOp r t, ShapeOp r t, Transformable r t) => MathOp (Target r) t whe
             let t0 :: r s0' t = coerce operand
                 t1 :: r s1' t = unsafeReduceMul t0 axies'
             in  coerce $! t1
+
+  unsafeConvolution :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 t -> Target r s2 t
+  unsafeConvolution (Target dims input) (Target [] kernel) = Target dims $ -- degenerate case
+    reifyShape (dims ++ inputShape) $
+      reifyShape convInShape $ 
+        reifyShape (dims ++ resultShape) $ 
+          reifyShape convOutShape
+            result
+    where inputShape   = shapeVal (Proxy :: Proxy s0)
+          resultShape  = shapeVal (Proxy :: Proxy s2)
+          batchSize    = head inputShape * product dims
+          convInShape  = batchSize:tail inputShape
+          convOutShape = batchSize:tail resultShape
+          result :: forall inS reS convInS convOutS. (KnownShape inS, KnownShape reS, KnownShape convInS, KnownShape convOutS) => 
+                      Proxy convOutS -> Proxy reS -> Proxy convInS -> Proxy inS -> r s2 t
+          result _ _ _ _ = 
+            let _input   :: r inS t      = coerce input
+                _input'  :: r convInS t  = unsafeReshape _input
+                _result  :: r convOutS t = unsafeConvolution _input' kernel
+                _result' :: r reS t      = unsafeReshape _result
+            in  coerce $! _result'
+
+  unsafeConvolution _ _ = error "The general case require taking diagonals of a tensor, which is not yet implemented"
+
 
   linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> Target r '[n] t
   linspace = Target [] . linspace

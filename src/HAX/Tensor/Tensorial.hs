@@ -134,6 +134,32 @@ type family Product (a :: Shape) :: Natural where
   Product (a ': as) = a * Product as
 type Reshapable operand result = (Product operand ~ Product result)
 
+type family Head (list :: [a]) :: a where
+  Head (a ': _) = a
+  Head _        = TypeError (Text "Given list is not long enough")
+
+type family Tail (list :: [a]) :: [a] where
+  Tail '[]      = TypeError (Text "Given list is not long enough")
+  Tail (_ ': a) = a
+
+type family Init (list :: [a]) :: [a] where
+  Init '[]       = TypeError (Text "Given list is not long enough")
+  Init '[a]      = '[]
+  Init (a ': as) = a ': Init as
+
+type family Last (list :: [a]) :: a where
+  Last '[]       = TypeError (Text "Given list is not long enough")
+  Last '[a]      = a
+  Last (a ': as) = Last as
+
+type Middle l = Init (Tail l)
+
+type family ConvResult (outfeat :: Nat) (input :: Shape) (output :: Shape) :: Shape where
+  ConvResult outfeat '[]       '[]       = '[outfeat]
+  ConvResult outfeat (i ': is) (k ': ks) = (i - k + 1) ': ConvResult outfeat is ks
+  ConvResult _ _ _ = TypeError (Text "Mismatch shape")
+type Convolution (input :: Shape) (kernel :: Shape) (output :: Shape) = (KnownShape input, KnownShape kernel, KnownShape output, Head kernel ~ Last input, output ~ (Head input ': ConvResult (Last kernel) (Middle input) (Middle kernel)))
+
 -- Tensorial
 class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
   type SHLOType a
@@ -300,7 +326,10 @@ class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
   unsafeTranspose   :: (KnownShape s0, KnownShape s1) => a s0 t -> [Integer] -> a s1 t
   unsafeReshape     :: (KnownShape s0, KnownShape s1) => a s0 t -> a s1 t 
   unsafeSlice       :: (KnownShape s0, KnownShape s1) => a s0 t -> [(Integer, Integer, Integer)] -> a s1 t
+  
+  -- TODO: Add user defined padding_value
   unsafePad         :: (KnownShape s0, KnownShape s1) => a s0 t -> [(Integer, Integer, Integer)] -> a s1 t
+  unsafeReverse     :: (KnownShape s0) => a s0 t -> [Integer] -> a s0 t
 
   -- With type checking
   broadcast :: Broadcast org map targ => a org t -> Proxy map -> a targ t
@@ -323,18 +352,18 @@ class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
 
 -- Consider making Num a superclass
 --    since all of these function do either addition or multiplication in complex way
-data ConvSpatialDimInfo  = ConvSpatialDimInfo  { windowStride     :: Integer, lhsDilation :: Integer, rhsDilation :: Integer, inputDim :: Integer, kernelDim :: Integer, outputDim :: Integer }
-data ConvBatchingDimInfo = ConvBatchingDimInfo { inputBatchingDim :: Integer, outputBatchingDim :: Integer }
-data ConvFeaturesDimInfo = ConvFeaturesDimInfo { inputFeaturesDim :: Integer, kernelInputFeaturesDim :: Integer, kernelOutputFeaturesDim :: Integer, outputFeaturesDim :: Integer }
 -- The lhs (image, or volume, or whatever) is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
---     rhs (kernel)                        is [IN FEAT DIM, ...(SPATIAL DIM)..., OUT FEAT DIM] 
+--     rhs (kernel)                        is [IN FEAT DIM,  ...(SPATIAL DIM)..., OUT FEAT DIM]
 --     output                              is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
+-- This is to simplify implementation
 
 class ShapeOp r t => MathOp r t where
   unsafeDotGeneral  :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> DotDimensionNumbersAttr -> r s2 t
   unsafeReduceAdd   :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
   unsafeReduceMul   :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
-  unsafeConvolution :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> ConvBatchingDimInfo -> [ConvSpatialDimInfo] -> ConvFeaturesDimInfo -> r s2 t
+
+  -- For padding, use explicitly pad the input, this simplify gradient calculation 
+  unsafeConvolution :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> r s2 t
 
   linearMap :: (KnownNat i, KnownNat o) => r '[i, o] t -> r '[i] t -> r '[o] t 
   linearMap mat vec = unsafeDotGeneral mat vec dotAttr 
@@ -361,6 +390,15 @@ class ShapeOp r t => MathOp r t where
   matmul :: (T '[m, n] t, T '[n, p] t, T '[m, p] t) => r '[m, n] t -> r '[n, p] t -> r '[m, p] t
   matmul lhs rhs = unsafeDotGeneral lhs rhs attr
     where attr = DotDimensionNumbersAttr { getContractingDims = [(1, 0)], getBatchingDims = [] }
+
+  convolution :: Convolution input kernel output => r input t -> r kernel t -> r output t 
+  convolution = unsafeConvolution
+
+  convolution' :: forall input kernel output. (KnownShape input, KnownShape output, Convolution (1 ': input) kernel (1 ': output)) => r input t -> r kernel t -> r output t
+  convolution' input kernel = unsafeReshape (unsafeConvolution input' kernel :: r (1 ': output) t)
+    where rank   = shapeRank (Proxy :: Proxy (1 ': input))
+          idxmap = [1..rank - 1]
+          input' = unsafeBroadcast input idxmap :: r (1 ': input) t
 
   -- TODO: Move this to a different class
   linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> r '[n] t
