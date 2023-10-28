@@ -161,7 +161,7 @@ type family ConvResult (outfeat :: Nat) (input :: Shape) (output :: Shape) :: Sh
 type Convolution (input :: Shape) (kernel :: Shape) (output :: Shape) = (KnownShape input, KnownShape kernel, KnownShape output, Head kernel ~ Last input, output ~ (Head input ': ConvResult (Last kernel) (Middle input) (Middle kernel)))
 
 -- Tensorial
-class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a) ) => Tensorial a where
+class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a)) => Tensorial a where
   type SHLOType a
   type DenseSplatAttr a
   type DenseElemsAttr a
@@ -176,9 +176,6 @@ class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseInt
 
   denseSplatAttr :: [Int64] -> a -> DenseSplatAttr a
   denseElemsAttr :: [Int64] -> PrimArray a -> DenseElemsAttr a
-
-  unitElement :: a  
-  nullElement :: a
 
 
 instance Tensorial Float where
@@ -195,8 +192,6 @@ instance Tensorial Float where
     where primArrayToByteArray :: PrimArray a -> ByteArray 
           primArrayToByteArray (PrimArray a) = ByteArray a
 
-  unitElement = 1
-  nullElement = 0
 
 instance Tensorial Word8 where
   type SHLOType Word8 = IntegerType
@@ -211,9 +206,22 @@ instance Tensorial Word8 where
   denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
     where primArrayToByteArray :: PrimArray a -> ByteArray 
           primArrayToByteArray (PrimArray a) = ByteArray a
-  
-  unitElement = 1
-  nullElement = 1
+
+instance Tensorial Int64 where
+  type SHLOType Int64 = IntegerType
+  type DenseSplatAttr Int64 = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Int64
+  type DenseElemsAttr Int64 = DenseElementsRawBuffer (RankedTensorType NullAttr IntegerType)
+
+  pjrtBufferType _ = s64
+  shloTensorType _ = SI64
+  staticSizeOf   _ = sizeOf (0 :: Int64)
+
+  denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape UI8 NullAttr)
+  denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
+    where primArrayToByteArray :: PrimArray a -> ByteArray 
+          primArrayToByteArray (PrimArray a) = ByteArray a
+
+
 newtype Pred = Pred Word8 deriving (Num, Eq, Prim, Storable)
 instance Show Pred where 
   show (Pred 0) = "False"
@@ -229,9 +237,6 @@ instance Tensorial Pred where
 
   denseSplatAttr shape (Pred w) = DenseIntOrFPElements (RankedTensorType shape (I 1) NullAttr) (w > 0)
   denseElemsAttr shape tensorData = DenseIntOrFPElements (RankedTensorType shape (I 1) NullAttr) ((Pred 0 /=) <$> primArrayToList tensorData)
-
-  unitElement = Pred 1
-  nullElement = Pred 0
 
 -- Traceable
 -- NOTE: Consider separating the arguments of a function and its outputs
@@ -328,7 +333,7 @@ class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
   unsafeSlice       :: (KnownShape s0, KnownShape s1) => a s0 t -> [(Integer, Integer, Integer)] -> a s1 t
   
   -- TODO: Add user defined padding_value
-  unsafePad         :: (KnownShape s0, KnownShape s1) => a s0 t -> [(Integer, Integer, Integer)] -> a s1 t
+  unsafePad         :: (KnownShape s0, KnownShape s1) => t -> a s0 t -> [(Integer, Integer, Integer)] -> a s1 t
   unsafeReverse     :: (KnownShape s0) => a s0 t -> [Integer] -> a s0 t
 
   -- With type checking
@@ -352,56 +357,63 @@ class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
 
 -- Consider making Num a superclass
 --    since all of these function do either addition or multiplication in complex way
+
 -- The lhs (image, or volume, or whatever) is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
 --     rhs (kernel)                        is [IN FEAT DIM,  ...(SPATIAL DIM)..., OUT FEAT DIM]
 --     output                              is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
 -- This is to simplify implementation
 
+
+-- TODO: Change integer to int (or int64)
 class ShapeOp r t => MathOp r t where
   unsafeDotGeneral  :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> DotDimensionNumbersAttr -> r s2 t
   unsafeReduceAdd   :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
   unsafeReduceMul   :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
 
-  -- For padding, use explicitly pad the input, this simplify gradient calculation 
+  -- For padding, use explicitly pad the input, this simplify gradient calculation, similarly for dialation
   unsafeConvolution :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> r s2 t
-
-  linearMap :: (KnownNat i, KnownNat o) => r '[i, o] t -> r '[i] t -> r '[o] t 
-  linearMap mat vec = unsafeDotGeneral mat vec dotAttr 
-    where dotAttr = DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [(0, 0)] }
-
-  sigma :: (KnownShape s, KnownShape s', KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
-  sigma operand = unsafeReduceAdd operand . shapeVal
-
-  sigma' :: forall s. (T s t, Num t) => r s t -> r '[] t
-  sigma' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
-
-  -- Name collision, yes I hate it
-  _pi :: (KnownShape s, KnownShape s', KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
-  _pi operand = unsafeReduceMul operand . shapeVal
-
-  _pi' :: forall s. (T s t, Num t) => r s t -> r '[] t
-  _pi' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
-
-  -- TODO: Implement + - * / etc with automatic broadcasting
-  prod :: (TensorProductConstraint lhs rhs p, Tensorial t) => r lhs t -> r rhs t -> r p t
-  prod x y = unsafeDotGeneral x y attr
-    where attr = DotDimensionNumbersAttr { getContractingDims = [], getBatchingDims = [] }
-  
-  matmul :: (T '[m, n] t, T '[n, p] t, T '[m, p] t) => r '[m, n] t -> r '[n, p] t -> r '[m, p] t
-  matmul lhs rhs = unsafeDotGeneral lhs rhs attr
-    where attr = DotDimensionNumbersAttr { getContractingDims = [(1, 0)], getBatchingDims = [] }
-
-  convolution :: Convolution input kernel output => r input t -> r kernel t -> r output t 
-  convolution = unsafeConvolution
-
-  convolution' :: forall input kernel output. (KnownShape input, KnownShape output, Convolution (1 ': input) kernel (1 ': output)) => r input t -> r kernel t -> r output t
-  convolution' input kernel = unsafeReshape (unsafeConvolution input' kernel :: r (1 ': output) t)
-    where rank   = shapeRank (Proxy :: Proxy (1 ': input))
-          idxmap = [1..rank - 1]
-          input' = unsafeBroadcast input idxmap :: r (1 ': input) t
+  unsafeIota        :: (KnownShape s0) => Integer -> r s0 t
 
   -- TODO: Move this to a different class
   linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> r '[n] t
+
+
+linearMap :: (MathOp r t, KnownNat i, KnownNat o) => r '[i, o] t -> r '[i] t -> r '[o] t 
+linearMap mat vec = unsafeDotGeneral mat vec dotAttr 
+  where dotAttr = DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [(0, 0)] }
+
+-- Reduction
+reduceAdd :: (MathOp r t, KnownShape s, KnownShape s', KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
+reduceAdd operand = unsafeReduceAdd operand . shapeVal
+
+reduceAdd' :: forall r s t. (MathOp r t, T s t, Num t) => r s t -> r '[] t
+reduceAdd' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
+
+reduceMul :: (MathOp r t, KnownShape s, KnownShape s', KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
+reduceMul operand = unsafeReduceMul operand . shapeVal
+
+reduceMul' :: forall r s t. (MathOp r t, T s t, Num t) => r s t -> r '[] t
+reduceMul' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
+
+-- TODO: Implement + - * / etc with automatic broadcasting
+prod :: (MathOp r t, TensorProductConstraint lhs rhs p, Tensorial t) => r lhs t -> r rhs t -> r p t
+prod x y = unsafeDotGeneral x y attr
+  where attr = DotDimensionNumbersAttr { getContractingDims = [], getBatchingDims = [] }
+
+matmul :: (MathOp r t, T '[m, n] t, T '[n, p] t, T '[m, p] t) => r '[m, n] t -> r '[n, p] t -> r '[m, p] t
+matmul lhs rhs = unsafeDotGeneral lhs rhs attr
+  where attr = DotDimensionNumbersAttr { getContractingDims = [(1, 0)], getBatchingDims = [] }
+
+convolution :: (Convolution input kernel output, MathOp r t) => r input t -> r kernel t -> r output t 
+convolution = unsafeConvolution
+
+convolution' :: forall input kernel output r t. (MathOp r t, KnownShape input, KnownShape output, Convolution (1 ': input) kernel (1 ': output)) => r input t -> r kernel t -> r output t
+convolution' input kernel = unsafeReshape (unsafeConvolution input' kernel :: r (1 ': output) t)
+  where rank   = shapeRank (Proxy :: Proxy (1 ': input))
+        idxmap = [1..rank - 1]
+        input' = unsafeBroadcast input idxmap :: r (1 ': input) t
+
+
 
 class Tensorial t => SelectOp r t where
   branch :: KnownShape s => r s t -> r s t -> r '[] Pred -> r s t
@@ -424,6 +436,20 @@ infixl 9 |#|
 (|@|) :: (MathOp r t, KnownNat n, KnownNat m, KnownNat q) => r '[n, m] t -> r '[m, q] t -> r '[n, q] t
 (|@|) = matmul
 infixl 8 |@|
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 -- TODO: Add conditional
 relu :: (SelectOp r t, KnownShape s, Num (r s t), OrderOp r t) => r s t -> r s t

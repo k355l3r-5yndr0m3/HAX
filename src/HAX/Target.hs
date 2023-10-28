@@ -206,15 +206,15 @@ instance (Tensorial t, ShapeOp r t, Transformable r t) => ShapeOp (Target r) t w
             in  coerce $! _result
           slicing' = fmap (0, , 1) dims ++ slicing
 
-  unsafePad :: forall s0 s1. (KnownShape s0, KnownShape s1) => Target r s0 t -> [(Integer, Integer, Integer)] -> Target r s1 t
-  unsafePad (Target dims operand) padding = Target dims $ 
+  unsafePad :: forall s0 s1. (KnownShape s0, KnownShape s1) => t -> Target r s0 t -> [(Integer, Integer, Integer)] -> Target r s1 t
+  unsafePad padval (Target dims operand) padding = Target dims $ 
     reifyShape (dims ++ shapeVal (Proxy :: Proxy s0)) $ 
       reifyShape (dims ++ shapeVal (Proxy :: Proxy s1))
         result 
     where result :: forall s0' s1'. (KnownShape s0', KnownShape s1') => Proxy s1' -> Proxy s0' -> r s1 t
           result _ _ = 
             let _operand :: r s0' t = coerce operand
-                _result  :: r s1' t = unsafePad _operand padding'
+                _result  :: r s1' t = unsafePad padval _operand padding'
             in  coerce $! _result
           padding' = ((0, 0, 0) <$ dims) ++ padding
 

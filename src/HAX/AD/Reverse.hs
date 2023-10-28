@@ -104,15 +104,15 @@ differentiableUnsafeTranspose (Reverse (f, f')) perm =
 differentiableUnsafeReshape :: forall r t s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => Reverse r s0 t -> Reverse r s1 t
 differentiableUnsafeReshape (Reverse (f, f')) = Reverse (unsafeReshape f, f' . unsafeReshape)
 
-differentiableUnsafeSlice :: forall r t s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => Reverse r s0 t -> [(Integer, Integer, Integer)] -> Reverse r s1 t
+differentiableUnsafeSlice :: forall r t s0 s1. (Num t, ShapeOp r t, KnownShape s0, KnownShape s1) => Reverse r s0 t -> [(Integer, Integer, Integer)] -> Reverse r s1 t
 differentiableUnsafeSlice (Reverse (f, f')) slicing = Reverse (unsafeSlice f slicing, \i ->
   let (starts, _, strides) = unzip3 slicing
       interior = fmap (+(-1)) strides
       higher   = zipWith4 (\low sh st tot -> tot - low - (sh - 1) * st - 1) starts (shapeVal (Proxy :: Proxy s0)) strides (shapeVal (Proxy :: Proxy s1))
-  in  f' $ unsafePad i (zip3 starts higher interior))
+  in  f' $ unsafePad 0 i (zip3 starts higher interior))
 
-differentiableUnsafePad :: forall r t s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => Reverse r s0 t -> [(Integer, Integer, Integer)] -> Reverse r s1 t
-differentiableUnsafePad (Reverse (f, f')) padding = Reverse (unsafePad f padding, \i -> 
+differentiableUnsafePad :: forall r t s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => t -> Reverse r s0 t -> [(Integer, Integer, Integer)] -> Reverse r s1 t
+differentiableUnsafePad padvalue (Reverse (f, f')) padding = Reverse (unsafePad padvalue f padding, \i -> 
   let (low, high, internal) = unzip3 padding
       slicing = zipWith4 (\l h a j -> (l, a - h, j + 1)) low high s internal
       s = shapeVal (Proxy :: Proxy s1)
@@ -138,7 +138,8 @@ instance {-# OVERLAPPABLE #-} ShapeOp r t => ShapeOp (Reverse r) t where
   unsafeTranspose x perm    = indifferentiable x (`unsafeTranspose` perm)
   unsafeReshape   x         = indifferentiable x unsafeReshape
   unsafeSlice     x slicing = indifferentiable x (`unsafeSlice` slicing)
-  unsafePad       x padding = indifferentiable x (`unsafePad` padding)
+  unsafePad padv  x padding = Reverse (unsafePad padv x' padding, const zero)
+    where Reverse (x', _)   = x
   unsafeReverse   x dims    = indifferentiable x (`unsafeReverse` dims)
 
 -- MathOp
@@ -217,7 +218,7 @@ differentiableUnsafeDotGeneral (Reverse (f, f')) (Reverse (g, g')) attr =
         p0 :: Proxy s0 = Proxy
         p1 :: Proxy s1 = Proxy
 
-differentiableUnsafeConvolution :: forall s0 s1 s2 r t. (KnownShape s0, KnownShape s1, KnownShape s2, MathOp r t, forall s. KnownShape s => Fractional (r s Float)) => Reverse r s0 t -> Reverse r s1 t -> Reverse r s2 t
+differentiableUnsafeConvolution :: forall s0 s1 s2 r t. (Num t, KnownShape s0, KnownShape s1, KnownShape s2, MathOp r t, forall s. KnownShape s => Fractional (r s Float)) => Reverse r s0 t -> Reverse r s1 t -> Reverse r s2 t
 differentiableUnsafeConvolution (Reverse (f, f')) (Reverse (g, g')) = Reverse (unsafeConvolution f g, \i -> f' (inputGradient i) <+> g' (kernelGradient i))
   where inputGradient :: r s2 t -> r s0 t
         inputGradient i = 
@@ -227,7 +228,7 @@ differentiableUnsafeConvolution (Reverse (f, f')) (Reverse (g, g')) = Reverse (u
                     expad = fmap (+(-1)) kerShape
                     inpad = fmap (+(-1)) (middle outShape)
                     padder = (0, 0, 0):zipWith (\a b -> (a, b, a)) expad inpad ++ [(0, 0, 0)]
-                    padded :: r padshape t = unsafePad i padder
+                    padded :: r padshape t = unsafePad 0 i padder
                 in  unsafeConvolution rkernel padded
               padShape = zipWith (\a b -> (a - 1) * 2 + b) kerShape (middle outShape)
           in  reifyShape padShape $ reifyShape (rotate rhsShape) result
@@ -249,6 +250,8 @@ differentiableUnsafeConvolution (Reverse (f, f')) (Reverse (g, g')) = Reverse (u
 
 instance (MathOp r Float, forall s. KnownShape s => Fractional (r s Float)) => MathOp (Reverse r) Float where
   linspace r = Reverse (linspace r, const zero)
+  unsafeIota dims = Reverse (unsafeIota dims, const zero)
+
   unsafeReduceMul = differentiableUnsafeReduceMul
   unsafeReduceAdd = differentiableUnsafeReduceAdd
   unsafeDotGeneral = differentiableUnsafeDotGeneral
@@ -256,6 +259,8 @@ instance (MathOp r Float, forall s. KnownShape s => Fractional (r s Float)) => M
 
 instance {-# OVERLAPPABLE #-} MathOp r t => MathOp (Reverse r) t where
   linspace r = Reverse (linspace r, const zero)
+  unsafeIota dims = Reverse (unsafeIota dims, const zero)
+
   unsafeReduceMul (Reverse (f, _)) dims = Reverse (unsafeReduceMul f dims, const zero)
   unsafeReduceAdd (Reverse (f, _)) dims = Reverse (unsafeReduceAdd f dims, const zero)
   unsafeDotGeneral (Reverse (f, _)) (Reverse (g, _)) attr = Reverse (unsafeDotGeneral f g attr, const zero)

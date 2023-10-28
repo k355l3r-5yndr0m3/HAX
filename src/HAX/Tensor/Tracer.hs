@@ -259,8 +259,8 @@ instance Tensorial t => ShapeOp Tracer t where
           mkVec :: [Integer] -> DenseIntOrFPElements (VectorType IntegerType) [Int64]
           mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] SI64) (fromIntegral <$> vec)
 
-  unsafePad :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
-  unsafePad operand padding = mkTracer $ do
+  unsafePad :: forall s0 s1. (KnownShape s0, KnownShape s1) => t -> Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
+  unsafePad padval operand padding = mkTracer $ do
     _operand <- sharing operand 
     _value   <- sharing value
     retval $ SHLO._PadOp (mkVec lower) (mkVec higher) (mkVec interior) _operand _value _type
@@ -268,7 +268,7 @@ instance Tensorial t => ShapeOp Tracer t where
           (lower, higher, interior) = unzip3 padding
           mkVec :: [Integer] -> DenseIntOrFPElements (VectorType IntegerType) [Int64]
           mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] SI64) (fromIntegral <$> vec)
-          value :: Tracer s0 t = splat nullElement
+          value :: Tracer s0 t = splat padval
 
   unsafeReverse :: forall s0. (KnownShape s0) => Tracer s0 t -> [Integer] -> Tracer s0 t
   unsafeReverse operand dims = mkTracer $ do
@@ -328,20 +328,29 @@ instance (Num t, Tensorial t) => MathOp Tracer t where
                                  (Nothing :: Maybe (DenseIntOrFPElements (VectorType IntegerType) Bool)) 
                                  attr (IntegerAttr SI64 1) (IntegerAttr SI64 1) Nothing _lhs _rhs _type
     where attr = ConvDimensionNumbersAttr {
-            inputBatchDim = undefined,
-            inputFeatDim  = undefined,
-            inputSpatDims = undefined,
+            inputBatchDim = 0,
+            inputFeatDim  = fromInteger rank0 - 1,
+            inputSpatDims = [1..fromInteger rank0 - 2],
             
-            kernelInputFeatDim  = undefined,
-            kernelOutputFeatDim = undefined,
-            kernelSpatDims      = undefined,
+            kernelInputFeatDim  = 0,
+            kernelOutputFeatDim = fromInteger rank1 - 1,
+            kernelSpatDims      = [1..fromInteger rank1 - 2],
             
-            outputBatchDim = undefined,
-            outputFeatDim  = undefined,
-            outputSpatDims = undefined
+            outputBatchDim = 0,
+            outputFeatDim  = fromInteger rank2 - 1,
+            outputSpatDims = [1..fromInteger rank2 - 2]
           }
           _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
           nothing :: Maybe (DenseIntOrFPElements (VectorType IntegerType) [Int64]) = Nothing
+          rank0 = shapeRank (Proxy :: Proxy s0)
+          rank1 = shapeRank (Proxy :: Proxy s1)
+          rank2 = shapeRank (Proxy :: Proxy s2)
+
+  unsafeIota :: forall s0. KnownShape s0 => Integer -> Tracer s0 t
+  unsafeIota dims = assert (dims < rank) $ mkTracer $ do 
+    retval $ SHLO._IotaOp (IntegerAttr SI64 (fromInteger dims)) _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s0 t))
+          rank  = shapeRank (Proxy :: Proxy s0)
 
 instance Tensorial t => SelectOp Tracer t where
   branch :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer '[] Pred -> Tracer s t

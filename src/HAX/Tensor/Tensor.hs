@@ -53,42 +53,44 @@ instance (T s a, Show a, Prim a) => Show (Tensor s a) where
                   (s', offs') = formater offs ies buf (c:s)
               in  formater offs' ((idx - 1, ext):ies) buf s'
 
-resizeList :: Int -> a -> [a] -> [a]
-resizeList len pad list
-  | len > 0   = 
-    case list of
-      []     -> replicate len pad
-      (a:as) -> a:resizeList (len - 1) pad as
-  | otherwise = []
-
-class T s t => ListToTensor s t where
-  type Padding s t
-  regularize :: Proxy s -> t -> [Padding s t] -> [Padding s t] 
-  padding    :: Proxy s -> t -> Padding s t
-  flatten    :: Proxy s -> [Padding s t] -> [t]
-
-instance T '[r0] t => ListToTensor '[r0] t where
-  type Padding '[r0] t = t
-  regularize _ = resizeList n 
-    where n = fromInteger $ shapeValHead (Proxy :: Proxy '[r0])
-  padding _ i = i
-  flatten _ = id
-
-instance (T (a ': as ': ass) t, ListToTensor (as ': ass) t) => ListToTensor (a ': as ': ass) t where
-  type Padding  (a ': as ': ass) t = [Padding (as ': ass) t]
-  regularize p t l = resizeList n (padding p t) l'
-    where n  = fromInteger $ shapeValHead (Proxy :: Proxy (a ': as ': ass))
-          l' = fmap (regularize (Proxy :: Proxy (as ': ass)) t) l
-  padding _ i = replicate n (padding (Proxy :: Proxy (as ': ass)) i)
-    where n = fromInteger $ shapeValHead (Proxy :: Proxy (as ': ass))
-  flatten _ = concatMap (flatten (Proxy :: Proxy (as ': ass)))
-
-instance ListToTensor s t => IsList (Tensor s t) where
-  type Item (Tensor s t) = Padding s t
-  fromList l = unsafePerformIO $ tensorFromHostBufferGC defaultDevice =<< l'
-    where p = Proxy :: Proxy s
-          l' = newArray $ flatten p $ regularize p (nullElement :: t) l
-  toList = error "TODO: Implement"
+-- resizeList :: Int -> a -> [a] -> [a]
+-- resizeList len pad list
+--   | len > 0   = 
+--     case list of
+--       []     -> replicate len pad
+--       (a:as) -> a:resizeList (len - 1) pad as
+--   | otherwise = []
+-- 
+-- class T s t => ListToTensor s t where
+--   type Padding s t
+--   regularize :: Proxy s -> t -> [Padding s t] -> [Padding s t] 
+--   padding    :: Proxy s -> t -> Padding s t
+--   flatten    :: Proxy s -> [Padding s t] -> [t]
+--   padvalue   :: Proxy s -> t
+-- 
+-- instance T '[r0] t => ListToTensor '[r0] t where
+--   type Padding '[r0] t = t
+--   regularize _ = resizeList n 
+--     where n = fromInteger $ shapeValHead (Proxy :: Proxy '[r0])
+--   padding _ i = i
+--   flatten _ = id
+--   padvalue _ = 0
+-- 
+-- instance (T (a ': as ': ass) t, ListToTensor (as ': ass) t) => ListToTensor (a ': as ': ass) t where
+--   type Padding  (a ': as ': ass) t = [Padding (as ': ass) t]
+--   regularize p t l = resizeList n (padding p t) l'
+--     where n  = fromInteger $ shapeValHead (Proxy :: Proxy (a ': as ': ass))
+--           l' = fmap (regularize (Proxy :: Proxy (as ': ass)) t) l
+--   padding _ i = replicate n (padding (Proxy :: Proxy (as ': ass)) i)
+--     where n = fromInteger $ shapeValHead (Proxy :: Proxy (as ': ass))
+--   flatten _ = concatMap (flatten (Proxy :: Proxy (as ': ass)))
+-- 
+-- instance ListToTensor s t => IsList (Tensor s t) where
+--   type Item (Tensor s t) = Padding s t
+--   fromList l = unsafePerformIO $ tensorFromHostBufferGC defaultDevice =<< l'
+--     where p = Proxy :: Proxy s
+--           l' = newArray $ flatten p $ regularize p (undefined) l
+--   toList = error "TODO: Implement"
 
 tensorToPrimArray :: Tensor s t -> PrimArray t
 tensorToPrimArray (Tensor buffer) = unsafePerformIO $ conv <$> bufferToHostBuffer buffer
