@@ -221,7 +221,7 @@ instance Tensorial t => ShapeOp Tracer t where
             in  isUnique idxmap && src == fmap (dst !!) (fromInteger <$> idxmap)
           _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
 
-  unsafeTranspose :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> [Integer] -> Tracer s1 t
+  unsafeTranspose :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeTranspose operand perm = assert correctness $ mkTracer $ do 
     _operand <- sharing operand 
     if perm == [0..fromIntegral $ length perm - 1] then -- degenerate case
@@ -238,7 +238,7 @@ instance Tensorial t => ShapeOp Tracer t where
             in  uniqueness perm && resultShape == map ((operandShape !!) . fromInteger) perm
           attr = TransposePerm (fromInteger <$> perm)
 
-  unsafeReshape :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> Tracer s1 t
+  unsafeReshape :: forall s0 s1 .(T s0 t, T s1 t) => Tracer s0 t -> Tracer s1 t
   unsafeReshape operand = assert correctness $ mkTracer $ do
     _operand <- sharing operand
     if operandShape == resultShape then 
@@ -250,7 +250,7 @@ instance Tensorial t => ShapeOp Tracer t where
           operandShape = shapeVal (Proxy :: Proxy s0)
           resultShape  = shapeVal (Proxy :: Proxy s1)
 
-  unsafeSlice :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
+  unsafeSlice :: forall s0 s1 .(T s0 t, T s1 t) => Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
   unsafeSlice operand slicing = mkTracer $ do
     _operand <- sharing operand
     retval $ SHLO._SliceOp (mkVec starts) (mkVec limits) (mkVec strides) _operand _type
@@ -259,7 +259,7 @@ instance Tensorial t => ShapeOp Tracer t where
           mkVec :: [Integer] -> DenseIntOrFPElements (VectorType IntegerType) [Int64]
           mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] SI64) (fromIntegral <$> vec)
 
-  unsafePad :: forall s0 s1. (KnownShape s0, KnownShape s1) => t -> Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
+  unsafePad :: forall s0 s1 .(T s0 t, T s1 t) => t -> Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
   unsafePad padval operand padding = mkTracer $ do
     _operand <- sharing operand 
     _value   <- sharing value
@@ -270,18 +270,63 @@ instance Tensorial t => ShapeOp Tracer t where
           mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] SI64) (fromIntegral <$> vec)
           value :: Tracer s0 t = splat padval
 
-  unsafeReverse :: forall s0. (KnownShape s0) => Tracer s0 t -> [Integer] -> Tracer s0 t
+  unsafeReverse :: forall s0 .T s0 t => Tracer s0 t -> [Integer] -> Tracer s0 t
   unsafeReverse operand dims = mkTracer $ do
     _operand <- sharing operand 
     retval $ SHLO._ReverseOp dims' _operand _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s0 t))
           dims' = DenseIntOrFPElements (VectorType [fromIntegral $ length dims] SI64) (fromInteger <$> dims :: [Int64])
 
-  splat :: forall s. T s t => t -> Tracer s t
+  splat :: forall s .T s t => t -> Tracer s t
   splat value = mkTracer $ do 
     retval $ SHLO._ConstantOp (denseSplatAttr shape value) _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
           shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+
+  unsafeScatter :: forall s0 s1 s2 .(T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 Int64 -> Tracer s2 t -> [Integer] -> [Integer] -> [Integer] -> Integer -> Tracer s0 t
+  unsafeScatter input sctIdx upd uwd iwd sdtod ivd = mkTracer $ do 
+    _input <- sharing input
+    _sctIdx <- sharing sctIdx
+    _upd <- sharing upd
+    retval $ head <$> SHLO._ScatterOp attr (Just $ BoolAttr False) (Just $ BoolAttr False) [_input, _sctIdx, _upd] (do 
+      blk <- blockGet [scalarType, scalarType]
+      blockDef blk $ do 
+        _1 <- blockArg 1
+        SHLO._ReturnOp [_1]) [_type]
+    where _type      = tensorType' (Proxy :: Proxy (Tracer s0 t))
+          scalarType = tensorType' (Proxy :: Proxy (Tracer '[] t)) 
+          attr       = ScatterDimensionNumbersAttr {
+                         updateWindow = fromInteger <$> uwd,
+                         insertWindow = fromInteger <$> iwd,
+                         scatterDimsToOperandDims = fromInteger <$> sdtod,
+                         indexVectorDim = fromInteger ivd
+                       }
+
+  unsafeGather :: forall s0 s1 s2 .(T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> [Integer] -> Tracer s2 t
+  unsafeGather operand starts offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes = mkTracer $ do 
+    _operand <- sharing operand
+    _starts  <- sharing starts
+    retval $ SHLO._GatherOp dimensionNumbers sliceSizesAttr (Just $ BoolAttr False) _operand _starts _type
+    where dimensionNumbers = GatherDimensionNumbersAttr { offsetDims = fromInteger <$> offsetAxes, 
+                                                          collapsedSliceDims = fromInteger <$> collapsedAxes,
+                                                          startIdxMap = fromInteger <$> startAxisMap,
+                                                          idxVecDim = fromInteger idxVectorAxis
+                                                        }
+          sliceSizesAttr = DenseIntOrFPElements (RankedTensorType [fromIntegral $ length sliceSizes] I64 NullAttr) (fromInteger <$> sliceSizes :: [Int64])
+          _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+
+  unsafeConcat :: forall s0 s1 s2. (KnownShape s0, KnownShape s1, KnownShape s2) => Integer -> Tracer s0 t -> Tracer s1 t -> Tracer s2 t
+  unsafeConcat dims lhs rhs = assert (lhsRank == rhsRank && lhsOtherAxes == rhsOtherAxes) $ mkTracer $ do 
+    _lhs <- sharing lhs 
+    _rhs <- sharing rhs
+    retval $ SHLO._ConcatenateOp (IntegerAttr SI64 $ fromInteger dims) [_lhs, _rhs] _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+          lhsRank = shapeRank (Proxy :: Proxy s0)
+          rhsRank = shapeRank (Proxy :: Proxy s1)
+          remove n a = take n a ++ drop (n + 1) a
+          lhsOtherAxes = remove (fromInteger dims) $ shapeVal (Proxy :: Proxy s0)
+          rhsOtherAxes = remove (fromInteger dims) $ shapeVal (Proxy :: Proxy s1)
+
 
 instance (Num t, Tensorial t) => MathOp Tracer t where
   -- TODO: Implement a better linspace
@@ -348,9 +393,11 @@ instance (Num t, Tensorial t) => MathOp Tracer t where
 
   unsafeIota :: forall s0. KnownShape s0 => Integer -> Tracer s0 t
   unsafeIota dims = assert (dims < rank) $ mkTracer $ do 
-    retval $ SHLO._IotaOp (IntegerAttr SI64 (fromInteger dims)) _type
+    retval $ SHLO._IotaOp (IntegerAttr I64 (fromInteger dims)) _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s0 t))
           rank  = shapeRank (Proxy :: Proxy s0)
+
+
 
 instance Tensorial t => SelectOp Tracer t where
   branch :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer '[] Pred -> Tracer s t

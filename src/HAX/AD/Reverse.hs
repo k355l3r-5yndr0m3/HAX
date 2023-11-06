@@ -5,9 +5,12 @@
 module HAX.AD.Reverse where
 import Prelude hiding (reverse)
 import HAX.Tensor.Tensorial
+import HAX.Tensor.Tensor (Tensor)
 
 import HAX.AD.Gradient
 import HAX.Utils
+import HAX.Jit
+
 
 import Control.Exception
 
@@ -17,6 +20,7 @@ import Data.List hiding (reverse)
 import Foreign.C
 
 import Stablehlo.Dialect.Stablehlo.Attributes
+import Data.Int (Int64)
 
 -- TODO: Consider using coerse instead of Dynamic for gradient
 --       Slightly more safe and more performance
@@ -121,8 +125,40 @@ differentiableUnsafePad padvalue (Reverse (f, f')) padding = Reverse (unsafePad 
 differentiableUnsafeReverse :: forall s0 t r. (ShapeOp r t, KnownShape s0) => Reverse r s0 t -> [Integer] -> Reverse r s0 t
 differentiableUnsafeReverse (Reverse (f, f')) dims = Reverse (unsafeReverse f dims, \i -> f' $ unsafeReverse i dims)
 
-instance (ShapeOp r Float, MathOp r Float) => ShapeOp (Reverse r) Float where
-  splat i = Reverse (splat i, const zero)
+-- If clamping occure, the gradient will not be accurate
+differentiableUnsafeGather :: (KnownShape s0, KnownShape s1, KnownShape s2, ShapeOp r t, Num t) => Reverse r s0 t -> Reverse r s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> [Integer] -> Reverse r s2 t
+differentiableUnsafeGather (Reverse (f, f')) (Reverse (g, _)) offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes = 
+  Reverse (unsafeGather f g offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes, 
+           \i -> 
+             let i' = unsafeScatter (splat 0) g i offsetAxes collapsedAxes startAxisMap idxVectorAxis
+             in  f' i')
+
+-- If no result index should be out of bound, or else gradient will not be accurate
+differentiableUnsafeScatter :: forall s0 s1 s2 r t.(ShapeOp r t, T s0 t, T s1 t, T s2 t, Num t) => Reverse r s0 t -> Reverse r s1 Int64 -> Reverse r s2 t -> [Integer] -> [Integer] -> [Integer] -> Integer -> Reverse r s0 t
+differentiableUnsafeScatter (Reverse (f, f')) (Reverse (g, _)) (Reverse (h, h')) updateWindowAxes insertWindowAxes sdtod indexVecAxis = 
+  Reverse (unsafeScatter f g h updateWindowAxes insertWindowAxes sdtod indexVecAxis, 
+           \i -> 
+             let lhs = f' $ unsafeScatter i g (splat 0 :: r s2 t) updateWindowAxes insertWindowAxes sdtod indexVecAxis 
+                 rhs = h' $ unsafeGather  i g updateWindowAxes insertWindowAxes sdtod indexVecAxis sliceSizes
+                 sliceSizes  = 
+                   let generator :: [Integer] -> [Integer] -> [Integer]
+                       generator a []     = a
+                       generator a (j:js) = generator (let k = fromInteger j in take k a ++ 1 : drop k a) js
+                   in  generator bounds $ sort insertWindowAxes
+                 resultShape = shapeVal (Proxy :: Proxy s2)
+                 bounds      = (resultShape !!) . fromInteger <$> updateWindowAxes
+             in  lhs <+> rhs)
+
+differentiableUnsafeConcat :: forall r t s0 s1 s2. (ShapeOp r t, T s0 t, T s1 t, T s2 t) => Integer -> Reverse r s0 t -> Reverse r s1 t -> Reverse r s2 t
+differentiableUnsafeConcat dims (Reverse (f, f')) (Reverse (g, g')) = Reverse (unsafeConcat dims f g, \i ->
+  f' (unsafeSlice i lhsSlicing) <+> g' (unsafeSlice i rhsSlicing))
+  where lhsSlicing = (0, , 1) <$> shapeVal (Proxy :: Proxy s0)
+        offs = shapeVal (Proxy :: Proxy s0) !! fromInteger dims
+        limt = shapeVal (Proxy :: Proxy s2) !! fromInteger dims
+        rhsSlicing = [if d == dims then (offs, limt, 1) else (0, s, 1) | (d, s) <- zip [0..] $ shapeVal (Proxy :: Proxy s1)]
+
+
+instance MathOp r Float => ShapeOp (Reverse r) Float where
   unsafeBroadcast = differentiableUnsafeBroadcast
   unsafeTranspose = differentiableUnsafeTranspose
   unsafeReshape   = differentiableUnsafeReshape
@@ -130,17 +166,29 @@ instance (ShapeOp r Float, MathOp r Float) => ShapeOp (Reverse r) Float where
   unsafePad       = differentiableUnsafePad
   unsafeReverse   = differentiableUnsafeReverse
 
-indifferentiable :: Reverse r s t -> (r s t -> r s' t) -> Reverse r s' t
-indifferentiable (Reverse (f, _)) y = Reverse (y f, const zero)
-instance {-# OVERLAPPABLE #-} ShapeOp r t => ShapeOp (Reverse r) t where
+  unsafeGather    = differentiableUnsafeGather
+  unsafeScatter   = differentiableUnsafeScatter
+
+  unsafeConcat    = differentiableUnsafeConcat
+
   splat i = Reverse (splat i, const zero)
-  unsafeBroadcast x _map    = indifferentiable x (`unsafeBroadcast` _map)
-  unsafeTranspose x perm    = indifferentiable x (`unsafeTranspose` perm)
-  unsafeReshape   x         = indifferentiable x unsafeReshape
-  unsafeSlice     x slicing = indifferentiable x (`unsafeSlice` slicing)
-  unsafePad padv  x padding = Reverse (unsafePad padv x' padding, const zero)
-    where Reverse (x', _)   = x
-  unsafeReverse   x dims    = indifferentiable x (`unsafeReverse` dims)
+
+instance {-# OVERLAPPABLE #-} ShapeOp r t => ShapeOp (Reverse r) t where
+  unsafeBroadcast (primal -> operand) dims = Reverse (unsafeBroadcast operand dims, nograd)
+  unsafeTranspose (primal -> operand) perm = Reverse (unsafeTranspose operand perm, nograd)
+  unsafeReshape   (primal -> operand)      = Reverse (unsafeReshape   operand,      nograd)
+  unsafeSlice     (primal -> operand) slic = Reverse (unsafeSlice     operand slic, nograd)
+  unsafePad value (primal -> operand) padd = Reverse (unsafePad value operand padd, nograd)
+  unsafeReverse   (primal -> operand) dims = Reverse (unsafeReverse   operand dims, nograd)
+
+  unsafeGather    (primal -> operand) (primal -> starts) offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes =
+    Reverse (unsafeGather operand starts offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes, nograd)
+  unsafeScatter   (primal -> operand) (primal -> scatterIndex) (primal -> update) uwd iwd sdtod ivd =
+    Reverse (unsafeScatter operand scatterIndex update uwd iwd sdtod ivd, nograd)
+  
+  unsafeConcat dims (primal -> lhs) (primal -> rhs) = Reverse (unsafeConcat dims lhs rhs, nograd)
+
+  splat i = Reverse (splat i, nograd)
 
 -- MathOp
 differentiableUnsafeReduceMul :: forall r t s0 s1. (ShapeOp r t, MathOp r t, Fractional (r s0 t), Num (r s1 t), T s0 t, T s1 t, Num t) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
@@ -299,6 +347,8 @@ instance (T s t, TraceableElement (r s t)) => TraceableElement (Reverse r s t) w
   constructTracer i = (i', Reverse (t, undefined), tt)
     where (i', t, tt) = constructTracer i
   deconstructTracer = deconstructTracer . primal
+-- For jit to work
+type instance JitTransform (Reverse r s t) = Tensor s t
 
 -- Reversable
 class Cotangent (ReversedType r) => Reversable r where
@@ -345,3 +395,4 @@ type RGrad f = Rev (GradResult f) f
 rgrad :: forall f. ReverseMode f => f -> RGrad f
 rgrad = rgrad' (rgradReify (Annotated 0 :: Annotated CIntPtr f), 0)
 -- TODO: Implement General
+

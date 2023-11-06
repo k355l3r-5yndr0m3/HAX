@@ -18,6 +18,9 @@ newtype Gradient = Gradient [(CIntPtr, Dynamic)]
 zero :: Gradient
 zero = Gradient []
 
+nograd :: a -> Gradient 
+nograd = const zero
+
 independent :: Typeable t => CIntPtr -> t -> Gradient
 independent idx val = Gradient [(idx, toDyn val)]
 

@@ -22,4 +22,3 @@ jrgrad :: (Rev (GradResult (a1 -> b1)) (a1 -> b1) ~ (a2 -> b2),
                    JitTransform a2 -> JitResult b2)
 jrgrad f = (jit f, jit $ rgrad f)
 
-

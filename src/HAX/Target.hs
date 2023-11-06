@@ -25,6 +25,7 @@ import Data.Bifunctor
 import Stablehlo.Dialect.Stablehlo.Attributes
 
 import GHC.TypeLits
+import Data.Int (Int64)
 
 -- Target: represent the target of vmap transformation
 --         Target dims r 
@@ -158,7 +159,7 @@ instance (T s t, forall s'. KnownShape s' => Floating (r s' t), ShapeOp r t, Tra
     where result :: forall s'. KnownShape s' => Proxy s' -> r s t
           result _ = coerce $! (log $ coerce operand :: r s' t)
 
-instance (Tensorial t, ShapeOp r t, Transformable r t) => ShapeOp (Target r) t where
+instance (Tensorial t, ShapeOp r t, Transformable r t, MathOp r Int64, Transformable r Int64) => ShapeOp (Target r) t where
   -- NOTE: haskell cannot determine the write method to call so this is a fix
   unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeBroadcast (Target dim operand) _map = Target dim $ 
@@ -227,10 +228,71 @@ instance (Tensorial t, ShapeOp r t, Transformable r t) => ShapeOp (Target r) t w
                 _result  :: r s0' t = unsafeReverse _operand ((+offset) <$> reverseDims)
             in  undefined
           offset = fromIntegral $ length dims
+  
+  unsafeGather :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> [Integer] -> Target r s2 t
+  unsafeGather (Target [] operand) (Target [] start) offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = Target [] $ 
+    unsafeGather operand start offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes
+  unsafeGather (Target batching operand) (Target [] start) offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = Target batching $ 
+    reifyShape (batching ++ shapeVal (Proxy :: Proxy s0)) $ \(same (coerce operand) -> operand') ->  
+      reifyShape (batching ++ shapeVal (Proxy :: Proxy s2)) $ \(same (unsafeGather operand' start offsetAxes' collapsedAxes' startAxesMap' idxVectorAxis sliceSizes') -> output) ->
+        coerce $! output
+    where batchRank      = fromIntegral $ length batching
+          offsetAxes'    = [0..batchRank - 1] ++ ((+batchRank) <$> offsetAxes)
+          collapsedAxes' = (+batchRank) <$> collapsedAxes
+          startAxesMap'  = (+batchRank) <$> startAxesMap
+          sliceSizes'    = batching ++ sliceSizes
+          same :: r s t -> Proxy s -> r s t
+          same = const
+  unsafeGather (Target [] operand) (Target batching start) offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = Target batching $ 
+    reifyShape (batching ++ shapeVal (Proxy :: Proxy s1)) $ \(same (coerce start) -> start') ->
+      reifyShape (batching ++ shapeVal (Proxy :: Proxy s2)) $ \(same' (unsafeGather operand start' offsetAxes' collapsedAxes startAxesMap idxVectorAxis' sliceSizes) -> output') ->
+        coerce $! output'
+    where batchRank      = fromIntegral $ length batching
+          offsetAxes'    = [0..batchRank - 1] ++ ((+batchRank) <$> offsetAxes)
+          idxVectorAxis' = batchRank + idxVectorAxis
+          same :: r s Int64 -> Proxy s -> r s Int64
+          same = const
+          same' :: r s t -> Proxy s -> r s t
+          same' = const
+  unsafeGather (Target opBatch operand) (Target stBatch start) offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = 
+    reifyShape (batchSize:shapeVal (Proxy :: Proxy s0)) $ \(same (coerce operand) -> operand') -> 
+      reifyShape (batchSize:shapeVal (Proxy :: Proxy s1)) $ \(same' (coerce start) -> start') -> 
+        reifyShape iotaShape $ \(sameT (unsafeIota idxVectorAxis') -> iota') ->
+          let oper = Target opBatch' operand'
+              star = Target stBatch' start'
+          in  reifyShape concatedShape $ \(sameT (unsafeConcat idxVectorAxis' iota' star) -> star') ->
+                unsafeGather oper star' offsetAxes' collapsedAxes' startAxesMap' idxVectorAxis' sliceSizes'
+    where batchSize = assert (last opBatch == last stBatch) $ last stBatch
+          opBatch'  = init opBatch
+          stBatch'  = init stBatch
+          offsetAxes'    = (+1) <$> offsetAxes
+          collapsedAxes' = 0:((+1) <$> collapsedAxes)
+          startAxesMap'  = 0:((+1) <$> startAxesMap)
+          idxVectorAxis' = idxVectorAxis + 1
+          sliceSizes'    = 0:sliceSizes
+          iotaShape      = batchSize:(take (fromIntegral idxVectorAxis) (shapeVal (Proxy :: Proxy s1)) ++ 1:drop (fromIntegral idxVectorAxis + 1) (shapeVal (Proxy :: Proxy s1)))
+          concatedShape  = batchSize:(take (fromIntegral idxVectorAxis) (shapeVal (Proxy :: Proxy s1)) ++ (1 + shapeVal (Proxy :: Proxy s1) !! fromIntegral idxVectorAxis):drop (fromIntegral idxVectorAxis + 1) (shapeVal (Proxy :: Proxy s1)))
+          same :: r s t -> Proxy s -> r s t
+          same = const
+          same' :: r s Int64 -> Proxy s -> r s Int64
+          same' = const
+          sameT :: Target r s Int64 -> Proxy s -> Target r s Int64 
+          sameT = const
+          
+  
+  unsafeConcat :: forall s0 s1 s2. (KnownShape s0, KnownShape s1, KnownShape s2) => Integer -> Target r s0 t -> Target r s1 t -> Target r s2 t
+  unsafeConcat d lhs rhs = Target b $
+    reifyShape (b ++ shapeVal (Proxy :: Proxy s0)) $ \(same (coerce _lhs) -> lhs') ->
+      reifyShape (b ++ shapeVal (Proxy :: Proxy s1)) $ \(same (coerce _rhs) -> rhs') -> 
+        reifyShape (b ++ shapeVal (Proxy :: Proxy s2)) $ \(same (unsafeConcat (d + fromIntegral (length b)) lhs' rhs') -> result') ->
+          coerce $! result'
+    where (b, _lhs, _rhs) = binary lhs rhs
+          same :: r h t -> Proxy h -> r h t
+          same i _ = i
 
   splat = Target [] . splat
 
-instance (MathOp r t, ShapeOp r t, Transformable r t) => MathOp (Target r) t where
+instance (MathOp r t, ShapeOp r t, Transformable r t, Transformable r Int64, MathOp r Int64) => MathOp (Target r) t where
   unsafeDotGeneral :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 t -> DotDimensionNumbersAttr -> Target r s2 t
   unsafeDotGeneral lhs rhs attr = Target dims $ 
     reifyShape s0 $ \ s0' -> 
@@ -302,14 +364,42 @@ instance (MathOp r t, ShapeOp r t, Transformable r t) => MathOp (Target r) t whe
                 _result  :: r convOutS t = unsafeConvolution _input' kernel
                 _result' :: r reS t      = unsafeReshape _result
             in  coerce $! _result'
+  unsafeConvolution input kernel = Target dims $
+    reifyShape inputShape $ \(same (coerce _input) -> input') -> 
+      reifyShape kernelShape $ \(same (coerce _kernel) -> kernel') ->
+        reifyShape (totalBatchSize : tail (shapeVal (Proxy :: Proxy s0))) $ \(same (unsafeReshape input') -> reshapedInput) ->
+          reifyShape [kernelShape !! fromInteger i | i <- kernelPerm] $ \(same (unsafeTranspose kernel' kernelPerm) -> transposedKernel) ->
+            reifyShape (init (shapeVal (Proxy :: Proxy s1)) ++ [outFeat * longBatchSize]) $ \(same (unsafeReshape transposedKernel) -> reshapedKernel) ->
+              reifyShape (totalBatchSize:outputSize ++ [outFeat * longBatchSize]) $ \(same (unsafeConvolution reshapedInput reshapedKernel) -> output) ->
+                reifyShape reshapedOutputShape $ \(same (unsafeReshape output) -> reshapedOutput) ->
+                  reifyShape diagedOutputShape $ \(same (unsafeDiagonal 0 outputRemoveDim reshapedOutput) -> diagedOutput) ->
+                    reifyShape outputFinalShape $ \(same (unsafeReshape diagedOutput) -> outputFinal) ->
+                      coerce $! outputFinal
+    where (dims, _input, _kernel) = binary input kernel
+          extraBatchDim  = fromIntegral $ length dims
+          longBatchSize  = product dims
+          shortBatchSize = head $ shapeVal (Proxy :: Proxy s0)
+          totalBatchSize = longBatchSize * shortBatchSize
+          inputShape  = dims ++ shapeVal (Proxy :: Proxy s0)
+          kernelShape = dims ++ shapeVal (Proxy :: Proxy s1)
+          same :: r h t -> Proxy h -> r h t
+          same i _ = i
+          kernelPerm = [i + extraBatchDim | i <- [0..shapeRank (Proxy :: Proxy s1) - 1]] ++ [0..extraBatchDim - 1]
+          middle = init . tail
+          windowSize = middle $ shapeVal (Proxy :: Proxy s0)
+          kernelSize = middle $ shapeVal (Proxy :: Proxy s1)
+          outFeat    = last   $ shapeVal (Proxy :: Proxy s1)
+          outputSize = [w - k + 1 | (w, k) <- zip windowSize kernelSize]
+          reshapedOutputShape = longBatchSize:shortBatchSize:outputSize ++ [outFeat, longBatchSize]
+          diagedOutputShape   = longBatchSize:shortBatchSize:outputSize ++ [outFeat]
+          outputRemoveDim     = fromIntegral $ length diagedOutputShape
+          outputFinalShape    = dims ++ shortBatchSize:outputSize ++ [outFeat]
+          
 
-  unsafeConvolution _ _ = error "The general case require taking diagonals of a tensor, which is not yet implemented"
-
-
-  linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> Target r '[n] t
+  unsafeIota dims = Target [] $ unsafeIota dims
   linspace = Target [] . linspace
 
-instance (SelectOp r t, ShapeOp r t, Transformable r t, ShapeOp r Pred, Transformable r Pred) => SelectOp (Target r) t where
+instance (SelectOp r t, ShapeOp r t, Transformable r t, ShapeOp r Pred, Transformable r Pred, MathOp r Int64, Transformable r Int64) => SelectOp (Target r) t where
   branch :: forall s. KnownShape s => Target r s t -> Target r s t -> Target r '[] Pred -> Target r s t
   branch false true (Target [] cond) = Target dims $ 
     reifyShape (dims ++ shape) $ \s ->
