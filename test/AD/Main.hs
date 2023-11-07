@@ -55,9 +55,9 @@ main = do
   print $ t2a [[2, -1, -4, 5], [5, -2, -5, 2]] [[0, 0, 0, 0], [5, 2, -1, -5]] 1
   print $ t2b [[2, -1, -4, 5], [5, -2, -5, 2]] [[0, 0, 0, 0], [5, 2, -1, -5]] 1
   let t3a = jit $ rgrad test3 
-  print $ t3a [[2, 4], [-1, 6]] [[1, 0], [0, 1]]
+  print $ t3a [[2, 4], [-1, 6]] [[True, False], [False, True]]
   let t4a = jit $ rgrad test4
-  print $ t4a [[2, 1], [5, 2], [-4, 1], [-5, -6]] [1, 0, 1, 0]
+  print $ t4a [[2, 1], [5, 2], [-4, 1], [-5, -6]] [False, True, False, True]
 
   putStrLn "========================"
   print $ (jit test5 :: Tensor [5, 5] Float -> Tensor '[5] Float) [[0, 1, 2, 3, 4], [1, 0, 1, 2, 3], [2, 1, 0, 1, 2], [3, 2, 1, 0, 1], [4, 3, 2, 1, 0]]

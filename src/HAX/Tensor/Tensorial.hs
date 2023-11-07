@@ -1,6 +1,5 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -8,6 +7,7 @@
 {-# LANGUAGE UndecidableSuperClasses #-}
 {-# LANGUAGE GeneralisedNewtypeDeriving #-}
 {-# LANGUAGE NoStarIsType #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 module HAX.Tensor.Tensorial where
 import Prelude hiding (pred)
 import HAX.PjRt.BufferType
@@ -171,6 +171,7 @@ class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseInt
   type SHLOType a
   type DenseSplatAttr a
   type DenseElemsAttr a
+  type LiteralType a = r | r -> a
 
   pjrtBufferType  :: Proxy a -> BufferType
   shloTensorType  :: Proxy a -> SHLOType a
@@ -180,69 +181,109 @@ class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseInt
 
   staticSizeOf   :: Proxy a -> Int
 
-  denseSplatAttr :: [Int64] -> a -> DenseSplatAttr a
-  denseElemsAttr :: [Int64] -> PrimArray a -> DenseElemsAttr a
+  denseSplatAttr :: [Int64] -> a   -> DenseSplatAttr a
+  denseElemsAttr :: [Int64] -> [a] -> DenseElemsAttr a
+
+
+  literalPadValue :: a
+  literalConvert  :: LiteralType a -> a
+
 
 
 instance Tensorial Float where
   type SHLOType Float = F32Type
   type DenseSplatAttr Float = DenseIntOrFPElements (RankedTensorType NullAttr F32Type) Float
   type DenseElemsAttr Float = DenseElementsRawBuffer (RankedTensorType NullAttr F32Type) 
+  type LiteralType Float = Float
 
   pjrtBufferType _ = f32
   shloTensorType _ = F32Type
   staticSizeOf   _ = sizeOf (0 :: Float)
   
   denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape F32Type NullAttr)
-  denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape F32Type NullAttr) (primArrayToByteArray tensorData)
-    where primArrayToByteArray :: PrimArray a -> ByteArray 
-          primArrayToByteArray (PrimArray a) = ByteArray a
+  -- denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape F32Type NullAttr) (primArrayToByteArray tensorData)
+  --   where primArrayToByteArray :: PrimArray a -> ByteArray 
+  --         primArrayToByteArray (PrimArray a) = ByteArray a
 
+  literalPadValue = 0
+  literalConvert  = id
 
 instance Tensorial Word8 where
   type SHLOType Word8 = IntegerType
   type DenseSplatAttr Word8 = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Word8
   type DenseElemsAttr Word8 = DenseElementsRawBuffer (RankedTensorType NullAttr IntegerType)
+  type LiteralType Word8 = Word8
 
   pjrtBufferType _ = u8
   shloTensorType _ = UI8
   staticSizeOf   _ = sizeOf (0 :: Word8)
 
   denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape UI8 NullAttr)
-  denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
-    where primArrayToByteArray :: PrimArray a -> ByteArray 
-          primArrayToByteArray (PrimArray a) = ByteArray a
+  -- denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
+  --   where primArrayToByteArray :: PrimArray a -> ByteArray 
+  --         primArrayToByteArray (PrimArray a) = ByteArray a
+
+  literalPadValue = 0
+  literalConvert  = id
 
 instance Tensorial Int64 where
   type SHLOType Int64 = IntegerType
   type DenseSplatAttr Int64 = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Int64
   type DenseElemsAttr Int64 = DenseElementsRawBuffer (RankedTensorType NullAttr IntegerType)
+  type LiteralType Int64 = Int64
 
   pjrtBufferType _ = s64
   shloTensorType _ = I64
   staticSizeOf   _ = sizeOf (0 :: Int64)
 
   denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape UI8 NullAttr)
-  denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
-    where primArrayToByteArray :: PrimArray a -> ByteArray 
-          primArrayToByteArray (PrimArray a) = ByteArray a
+  -- denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
+  --   where primArrayToByteArray :: PrimArray a -> ByteArray 
+  --         primArrayToByteArray (PrimArray a) = ByteArray a
 
+  literalPadValue = 0
+  literalConvert  = id
 
 newtype Pred = Pred Word8 deriving (Num, Eq, Prim, Storable)
 instance Show Pred where 
   show (Pred 0) = "False"
   show _        = "True "
+
 instance Tensorial Pred where
   type SHLOType Pred = IntegerType
   type DenseSplatAttr Pred = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Bool
   type DenseElemsAttr Pred = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) [Bool]
+  type LiteralType Pred = Bool
   
   pjrtBufferType _ = pred
   shloTensorType _ = I 1
   staticSizeOf   _ = sizeOf (0 :: Word8)
 
   denseSplatAttr shape (Pred w) = DenseIntOrFPElements (RankedTensorType shape (I 1) NullAttr) (w > 0)
-  denseElemsAttr shape tensorData = DenseIntOrFPElements (RankedTensorType shape (I 1) NullAttr) ((Pred 0 /=) <$> primArrayToList tensorData)
+
+  literalPadValue = Pred 0
+  literalConvert v = Pred $ if v then 1 else 0
+
+type family ListItem a where
+  ListItem [a] = a
+  ListItem _   = TypeError (Text "Type is not a list")
+
+class KnownShape s => TensorLiteral (s :: Shape) where
+  type Literal s t
+
+  fromTensorLiteral :: Proxy s -> q -> (t -> q) -> Literal s t -> [q]
+
+instance TensorLiteral '[] where
+  type Literal '[] t = t
+
+  fromTensorLiteral _ _ c a = [c a]
+
+instance (KnownNat i, TensorLiteral is) => TensorLiteral (i ': is) where
+  type Literal (i ': is) t = [Literal is t]
+  
+  fromTensorLiteral (fromInteger . product . shapeVal -> nelem) p c l = undefined $ take nelem (concatMap f l ++ repeat p)
+    where f = fromTensorLiteral (Proxy :: Proxy is) p c
+
 
 -- Traceable
 -- NOTE: Consider separating the arguments of a function and its outputs

@@ -25,6 +25,7 @@ import MLIR
 
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
+import GHC.IsList
 
 newtype Tracer (s :: Shape) t = Tracer (IntMap Value -> BlockM (IntMap Value, Value))
 
@@ -44,6 +45,18 @@ instance Monad TracerM where
     (t1, a') <- a t0 
     let TracerM b = f a'
     b t1 
+
+instance (T s t, TensorLiteral s, [i] ~ Literal s t) => IsList (Tracer s t) where
+  type Item (Tracer s t) = ListItem (Literal s t)
+
+  fromList a = mkTracer $ do 
+    retval $ SHLO._ConstantOp content _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+          shape = fromInteger <$> shapeVal proxy
+          proxy = Proxy :: Proxy s
+          content = DenseIntOrFPElements (RankedTensorType shape (shloTensorType (Proxy :: Proxy t)) NullAttr) (fromTensorLiteral proxy a :: [t])
+          
+
 
 mkTracer :: TracerM Value -> Tracer s t
 mkTracer (TracerM f) = Tracer f

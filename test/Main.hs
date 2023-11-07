@@ -182,7 +182,7 @@ main = do
   traceDebug test24
   traceDebugGrad test24
 
-  print ([[Pred 1, Pred 0], [Pred 0, Pred 1]] :: Tensor '[2, 2] Pred)
+  print ([[True, False], [False, True]] :: Tensor '[2, 2] Pred)
   let t24 = jit test24
   print $ t24 [[0, 4, 2, 5], [1, -3, -4, -5]] [[0, -1, -5, -3], [4, 2, 5, 6]] 0
 
