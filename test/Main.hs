@@ -18,6 +18,7 @@ import System.Random
 
 import Data.Proxy
 import Data.Word
+import Data.Int
 
 test1 :: Target Tracer '[5] Float -> Target Tracer '[5] Float -> Target Tracer '[5] Float 
 test1 = (+)
@@ -107,17 +108,30 @@ test23 :: Tracer '[5] Float -> Tracer '[5] Float -> Tracer '[5] Float -> Tracer 
 test23 x y z = x + z - y
 
 -- branching and predicate
-test24 :: Target (Reverse Tracer) '[2, 4] Float -> Target (Reverse Tracer) '[2, 4] Float -> Target (Reverse Tracer) '[] Pred -> Target (Reverse Tracer) '[2, 4] Float
+test24 :: Target (Reverse Tracer) '[2, 4] Float -> Target (Reverse Tracer) '[2, 4] Float -> Target (Reverse Tracer) '[] Bool -> Target (Reverse Tracer) '[2, 4] Float
 test24 x y = branch (x - y) (x * y)
 
-test25 :: Tracer '[5, 5] Float -> Tracer '[5, 5] Float -> Tracer '[5, 5] Pred
+test25 :: Tracer '[5, 5] Float -> Tracer '[5, 5] Float -> Tracer '[5, 5] Bool
 test25 = isGT
 
 test26 :: Tracer '[5, 5] Float -> Tracer '[5, 5] Float
 test26 x = select (x + 2) x (x `isGT` 0)
 
+
 -- Recursion test
 -- TODO: Implement
+
+
+test27 :: Target Tracer [5, 5] Float -> Target Tracer '[5] Float -> Target Tracer [5, 5] Float
+test27 x y = unsafeScatter x indices y [] [0, 1] [0, 1] 1
+  where indices :: Target Tracer [5, 2] Int64 = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]
+
+
+test28 :: Target Tracer [3, 5, 5] Float -> Target Tracer [3, 5] Float -> Target Tracer [3, 5, 5] Float
+test28 = vmap test27
+
+test29 :: Target Tracer [3, 5, 5] Float -> Target Tracer '[5] Float -> Target Tracer [3, 5, 5] Float
+test29 x y = vmap (`test27` y) x
 
 main :: IO ()
 main = do 
@@ -182,12 +196,26 @@ main = do
   traceDebug test24
   traceDebugGrad test24
 
-  print ([[True, False], [False, True]] :: Tensor '[2, 2] Pred)
+  print ([[True, False], [False, True]] :: Tensor '[2, 2] Bool)
   let t24 = jit test24
-  print $ t24 [[0, 4, 2, 5], [1, -3, -4, -5]] [[0, -1, -5, -3], [4, 2, 5, 6]] 0
+  print $ t24 [[0, 4, 2, 5], [1, -3, -4, -5]] [[0, -1, -5, -3], [4, 2, 5, 6]] (splat False)
 
   traceDebug test25
   traceDebug test26
+
+
+
+  print (linspace (0, 1) :: Tensor '[5] Float)
+  
+  print (jit test27 [[0, 4, 3, 1, 5],
+                     [4, 1, 3, 7, 1],
+                     [9, 3, 5, 2, 3],
+                     [3, 3, 7, 3, 5],
+                     [3, 5, 7, 2, 5]] 
+                     [9, 9, 9, 9, 9])
+
+  print (jit test28 0 (1 + unsafeIota 0))
+  print (jit test29 0 (1 + unsafeIota 0))
   
   clientDestroy client
   return ()

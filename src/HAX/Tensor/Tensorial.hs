@@ -167,11 +167,9 @@ type family Iota (dim :: Nat) (shape :: Shape) :: Constraint where
   Iota n (_ ': as) = Iota (n - 1) as
 
 -- Tensorial
-class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseIntOrFPElementsAttr (DenseSplatAttr a), TypeGet (SHLOType a)) => Tensorial a where
+class (Prim (StorageType a), Storable (StorageType a), TypeGet (SHLOType a)) => Tensorial a where
   type SHLOType a
-  type DenseSplatAttr a
-  type DenseElemsAttr a
-  type LiteralType a = r | r -> a
+  type StorageType a = r | r -> a
 
   pjrtBufferType  :: Proxy a -> BufferType
   shloTensorType  :: Proxy a -> SHLOType a
@@ -181,88 +179,99 @@ class (Prim a, Storable a, DenseIntOrFPElementsAttr (DenseElemsAttr a), DenseInt
 
   staticSizeOf   :: Proxy a -> Int
 
-  denseSplatAttr :: [Int64] -> a   -> DenseSplatAttr a
-  denseElemsAttr :: [Int64] -> [a] -> DenseElemsAttr a
+  splatConstant :: [Int64] -> a   -> BlockM Value
+  elemsConstant :: [Int64] -> [a] -> BlockM Value
 
+  fromHaskell :: a -> StorageType a
+  toHaskell   :: StorageType a -> a
 
-  literalPadValue :: a
-  literalConvert  :: LiteralType a -> a
-
+  literalPad  :: a
 
 
 instance Tensorial Float where
   type SHLOType Float = F32Type
-  type DenseSplatAttr Float = DenseIntOrFPElements (RankedTensorType NullAttr F32Type) Float
-  type DenseElemsAttr Float = DenseElementsRawBuffer (RankedTensorType NullAttr F32Type) 
-  type LiteralType Float = Float
+  type StorageType Float = Float
 
   pjrtBufferType _ = f32
   shloTensorType _ = F32Type
   staticSizeOf   _ = sizeOf (0 :: Float)
   
-  denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape F32Type NullAttr)
-  -- denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape F32Type NullAttr) (primArrayToByteArray tensorData)
-  --   where primArrayToByteArray :: PrimArray a -> ByteArray 
-  --         primArrayToByteArray (PrimArray a) = ByteArray a
+  splatConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
+    where attr  = DenseIntOrFPElements _type value
+          _type = RankedTensorType shape F32Type NullAttr
+  elemsConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
+    where attr  = DenseIntOrFPElements _type value
+          _type = RankedTensorType shape F32Type NullAttr
 
-  literalPadValue = 0
-  literalConvert  = id
-
+  fromHaskell = id
+  toHaskell   = id
+  
+  literalPad = 0
+  
 instance Tensorial Word8 where
   type SHLOType Word8 = IntegerType
-  type DenseSplatAttr Word8 = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Word8
-  type DenseElemsAttr Word8 = DenseElementsRawBuffer (RankedTensorType NullAttr IntegerType)
-  type LiteralType Word8 = Word8
+  type StorageType Word8 = Word8
 
   pjrtBufferType _ = u8
   shloTensorType _ = UI8
   staticSizeOf   _ = sizeOf (0 :: Word8)
 
-  denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape UI8 NullAttr)
-  -- denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
-  --   where primArrayToByteArray :: PrimArray a -> ByteArray 
-  --         primArrayToByteArray (PrimArray a) = ByteArray a
+  splatConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
+    where attr  = DenseIntOrFPElements _type value
+          _type = RankedTensorType shape UI8 NullAttr
+  elemsConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
+    where attr  = DenseIntOrFPElements _type value
+          _type = RankedTensorType shape UI8 NullAttr
 
-  literalPadValue = 0
-  literalConvert  = id
+  fromHaskell = id
+  toHaskell   = id
+
+  literalPad = 0
 
 instance Tensorial Int64 where
   type SHLOType Int64 = IntegerType
-  type DenseSplatAttr Int64 = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Int64
-  type DenseElemsAttr Int64 = DenseElementsRawBuffer (RankedTensorType NullAttr IntegerType)
-  type LiteralType Int64 = Int64
+  type StorageType Int64 = Int64
 
   pjrtBufferType _ = s64
   shloTensorType _ = I64
   staticSizeOf   _ = sizeOf (0 :: Int64)
 
-  denseSplatAttr shape = DenseIntOrFPElements (RankedTensorType shape UI8 NullAttr)
-  -- denseElemsAttr shape tensorData = DenseElementsRawBuffer (RankedTensorType shape UI8 NullAttr) (primArrayToByteArray tensorData)
-  --   where primArrayToByteArray :: PrimArray a -> ByteArray 
-  --         primArrayToByteArray (PrimArray a) = ByteArray a
+  splatConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
+    where attr  = DenseIntOrFPElements _type value
+          _type = RankedTensorType shape I64 NullAttr
+  elemsConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
+    where attr  = DenseIntOrFPElements _type value
+          _type = RankedTensorType shape I64 NullAttr
+  
+  fromHaskell = id
+  toHaskell   = id
 
-  literalPadValue = 0
-  literalConvert  = id
+  literalPad = 0
 
 newtype Pred = Pred Word8 deriving (Num, Eq, Prim, Storable)
 instance Show Pred where 
   show (Pred 0) = "False"
   show _        = "True "
 
-instance Tensorial Pred where
-  type SHLOType Pred = IntegerType
-  type DenseSplatAttr Pred = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) Bool
-  type DenseElemsAttr Pred = DenseIntOrFPElements (RankedTensorType NullAttr IntegerType) [Bool]
-  type LiteralType Pred = Bool
+instance Tensorial Bool where
+  type SHLOType Bool = IntegerType
+  type StorageType Bool = Pred
   
   pjrtBufferType _ = pred
   shloTensorType _ = I 1
   staticSizeOf   _ = sizeOf (0 :: Word8)
 
-  denseSplatAttr shape (Pred w) = DenseIntOrFPElements (RankedTensorType shape (I 1) NullAttr) (w > 0)
+  splatConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
+    where attr  = DenseIntOrFPElements _type value
+          _type = RankedTensorType shape (I 1) NullAttr
+  elemsConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
+    where attr  = DenseIntOrFPElements _type value
+          _type = RankedTensorType shape (I 1) NullAttr
 
-  literalPadValue = Pred 0
-  literalConvert v = Pred $ if v then 1 else 0
+  fromHaskell i = if i then 1 else 0
+  toHaskell (Pred i) = i > 0
+
+  literalPad = False
 
 type family ListItem a where
   ListItem [a] = a
@@ -281,7 +290,7 @@ instance TensorLiteral '[] where
 instance (KnownNat i, TensorLiteral is) => TensorLiteral (i ': is) where
   type Literal (i ': is) t = [Literal is t]
   
-  fromTensorLiteral (fromInteger . product . shapeVal -> nelem) p c l = undefined $ take nelem (concatMap f l ++ repeat p)
+  fromTensorLiteral (fromInteger . product . shapeVal -> nelem) p c l = take nelem (concatMap f l ++ repeat p)
     where f = fromTensorLiteral (Proxy :: Proxy is) p c
 
 
@@ -341,7 +350,7 @@ instance {-# OVERLAPPING #-} (TraceableElement t, Traceable f) => Traceable (t -
   trace' i f = second (first (tt++)) $ trace' i' (f t)
     where (i', t, tt) = constructTracer i
 
-trace :: Traceable (a -> b) => (a -> b) -> (BlockM [Value], ([AnyType], [AnyType]))
+trace :: Traceable f => f -> (BlockM [Value], ([AnyType], [AnyType]))
 trace f = (fmap snd (_fst empty), _snd)
   where (_fst, _snd) = trace' 0 f
 
@@ -455,6 +464,26 @@ class ShapeOp r t => MathOp r t where
   -- TODO: Move this to a different class
   linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> r '[n] t
 
+unsafeMultiIota :: forall r s t. (MathOp r t, KnownShape s) => [Integer] -> Integer -> r s t
+unsafeMultiIota []     _ = error "idim needs to be given"
+unsafeMultiIota [a]    d = assert (shapeVal (Proxy :: Proxy s) !! fromInteger d == 1) unsafeIota a
+unsafeMultiIota (a:as) d = 
+  reifyShape (changeAt d' (const 1) shape) $ \(same (unsafeIota a) -> a') ->
+    reifyShape (changeAt d' (+(-1)) shape) $ \(same (unsafeMultiIota as d) -> as') ->
+      unsafeConcat d a' as'
+  where changeAt :: Int -> (a -> a) -> [a] -> [a]
+        changeAt i f n
+          | i >= 0    = 
+            let changeAt' _ []     = []
+                changeAt' j (b:bs) = if j == 0 then f b:bs else b:changeAt' (j - 1) bs
+            in  changeAt' i n
+          | otherwise = error "Negative index"
+        shape = shapeVal (Proxy :: Proxy s)
+        same :: KnownShape p => r p t -> Proxy p -> r p t
+        same = const
+        d' = fromInteger d
+
+
 iota :: (Iota d s, MathOp r t, KnownShape s, KnownNat d) => Proxy d -> r s t
 iota = unsafeIota . natVal
 
@@ -494,18 +523,18 @@ convolution' input kernel = unsafeReshape (unsafeConvolution input' kernel :: r 
         input' = unsafeBroadcast input idxmap :: r (1 ': input) t
 
 class Tensorial t => SelectOp r t where
-  branch :: KnownShape s => r s t -> r s t -> r '[] Pred -> r s t
-  select :: KnownShape s => r s t -> r s t -> r s   Pred -> r s t
+  branch :: KnownShape s => r s t -> r s t -> r '[] Bool -> r s t
+  select :: KnownShape s => r s t -> r s t -> r s   Bool -> r s t
 
 class Tensorial t => EqualOp r t where
-  isEQ :: KnownShape s => r s t -> r s t -> r s Pred
-  isNE :: KnownShape s => r s t -> r s t -> r s Pred
+  isEQ :: KnownShape s => r s t -> r s t -> r s Bool
+  isNE :: KnownShape s => r s t -> r s t -> r s Bool
 
 class EqualOp r t => OrderOp r t where
-  isGT :: KnownShape s => r s t -> r s t -> r s Pred
-  isGE :: KnownShape s => r s t -> r s t -> r s Pred
-  isLT :: KnownShape s => r s t -> r s t -> r s Pred
-  isLE :: KnownShape s => r s t -> r s t -> r s Pred
+  isGT :: KnownShape s => r s t -> r s t -> r s Bool
+  isGE :: KnownShape s => r s t -> r s t -> r s Bool
+  isLT :: KnownShape s => r s t -> r s t -> r s Bool
+  isLE :: KnownShape s => r s t -> r s t -> r s Bool
 
 (|#|) :: (MathOp a t, TensorProductConstraint l r p) => a l t -> a r t -> a p t
 (|#|) = prod

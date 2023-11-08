@@ -22,7 +22,7 @@ import GHC.IO.Unsafe
 import GHC.TypeError
 
 {-# NOINLINE compile #-}
-compile :: Traceable (a -> b) => (a -> b) -> (Int, LoadedExecutable)
+compile :: Traceable f => f -> (Int, LoadedExecutable)
 compile f = unsafePerformIO $ (length outs, ) <$> (
   clientCompile client =<< runContextM (do
     loadDialect_ Func.dialect
@@ -73,5 +73,5 @@ type family JitResult f where
 
 {-# NOINLINE jit #-}
 type J f f' = (Traceable f, Jit f', f' ~ JitResult f)
-jit :: (J f f', f ~ (a -> b)) => f -> f' 
+jit :: J f f' => f -> f' 
 jit f = jit' (Annotated [] :: Annotated [Buffer] f', compile f)

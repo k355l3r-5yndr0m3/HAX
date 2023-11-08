@@ -84,6 +84,7 @@ library
                       HAX.AD.Gradient
                       HAX.Jit
                       HAX.Utils
+                      HAX.NN
     -- TODO: Move some of these modules to other
 
     -- Modules included in this library but not exported.
@@ -98,6 +99,7 @@ library
                       HAX.PjRt.Event
                       HAX.PjRt.LoadedExecutable
                       HAX.PjRt.Client
+                      HAX.NN.Parameterized
 
 
     -- LANGUAGE extensions used by modules in this package.

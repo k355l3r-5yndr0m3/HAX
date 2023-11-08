@@ -19,13 +19,13 @@ delta :: Fractional t => t
 delta = 0.004918684734
 
 class Tensorial t => Neighborhood t where
-  neighborhood' :: KnownShape s => t -> Tensor s t -> [Tensor s t]
+  neighborhood' :: KnownShape s => StorageType t -> Tensor s t -> [Tensor s t]
   neighborhood  :: KnownShape s => Tensor s t -> [Tensor s t]
   
   realGradToTensor :: (Real t', KnownShape s) => [t'] -> Tensor s t
 
-instance {-# OVERLAPPABLE #-} (Tensorial t, Fractional t) => Neighborhood t where
-  neighborhood' :: forall s. (T s t, Num t) => t -> Tensor s t -> [Tensor s t]
+instance {-# OVERLAPPABLE #-} (Tensorial t, Fractional (StorageType t)) => Neighborhood t where
+  neighborhood' :: forall s. KnownShape s => StorageType t -> Tensor s t -> [Tensor s t]
   neighborhood' _delta (tensorToPrimArray -> tensor) = [unsafePerformIO $ do 
     buffer <- mallocArray nelem
     copyPrimArrayToPtr buffer tensor 0 nelem
@@ -40,11 +40,11 @@ instance Neighborhood Word8 where
   neighborhood  _   = []
 
   realGradToTensor _ = 0
-instance Neighborhood Pred where
+instance Neighborhood Bool where
   neighborhood' _ _ = []
   neighborhood  _   = []
 
-  realGradToTensor _ = splat (Pred 0)
+  realGradToTensor _ = splat False
 
 class NumericalMethod f where
   type NGradFunc g f

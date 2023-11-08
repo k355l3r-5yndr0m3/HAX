@@ -21,16 +21,23 @@ import Foreign.C
 
 import Stablehlo.Dialect.Stablehlo.Attributes
 import Data.Int (Int64)
+import GHC.IsList
+import Data.Word (Word8)
 
 -- TODO: Consider using coerse instead of Dynamic for gradient
 --       Slightly more safe and more performance
 -- TODO: Use pattern syn 
+-- TODO: Remove overlapping instances
 newtype Reverse r s t = Reverse (r s t, r s t -> Gradient)
 primal :: Reverse r s t -> r s t 
 primal (Reverse t) = fst t
 
 cotangent :: Reverse r s t -> r s t -> Gradient 
 cotangent (Reverse t) = snd t
+
+instance IsList (r s t) => IsList (Reverse r s t) where
+  type Item (Reverse r s t) = Item (r s t)
+  fromList = Reverse . (, nograd) . fromList
 
 -- TODO: Implement none differentiable types
 instance Num (r s t) => Num (Reverse r s t) where
@@ -112,7 +119,7 @@ differentiableUnsafeSlice :: forall r t s0 s1. (Num t, ShapeOp r t, KnownShape s
 differentiableUnsafeSlice (Reverse (f, f')) slicing = Reverse (unsafeSlice f slicing, \i ->
   let (starts, _, strides) = unzip3 slicing
       interior = fmap (+(-1)) strides
-      higher   = zipWith4 (\low sh st tot -> tot - low - (sh - 1) * st - 1) starts (shapeVal (Proxy :: Proxy s0)) strides (shapeVal (Proxy :: Proxy s1))
+      higher   = zipWith4 (\low axis st tot -> tot - low - (axis - 1) * st - 1) starts (shapeVal (Proxy :: Proxy s1)) strides (shapeVal (Proxy :: Proxy s0))
   in  f' $ unsafePad 0 i (zip3 starts higher interior))
 
 differentiableUnsafePad :: forall r t s0 s1. (ShapeOp r t, KnownShape s0, KnownShape s1) => t -> Reverse r s0 t -> [(Integer, Integer, Integer)] -> Reverse r s1 t
@@ -157,7 +164,6 @@ differentiableUnsafeConcat dims (Reverse (f, f')) (Reverse (g, g')) = Reverse (u
         limt = shapeVal (Proxy :: Proxy s2) !! fromInteger dims
         rhsSlicing = [if d == dims then (offs, limt, 1) else (0, s, 1) | (d, s) <- zip [0..] $ shapeVal (Proxy :: Proxy s1)]
 
-
 instance MathOp r Float => ShapeOp (Reverse r) Float where
   unsafeBroadcast = differentiableUnsafeBroadcast
   unsafeTranspose = differentiableUnsafeTranspose
@@ -173,7 +179,7 @@ instance MathOp r Float => ShapeOp (Reverse r) Float where
 
   splat i = Reverse (splat i, const zero)
 
-instance {-# OVERLAPPABLE #-} ShapeOp r t => ShapeOp (Reverse r) t where
+instance ShapeOp r Int64 => ShapeOp (Reverse r) Int64 where
   unsafeBroadcast (primal -> operand) dims = Reverse (unsafeBroadcast operand dims, nograd)
   unsafeTranspose (primal -> operand) perm = Reverse (unsafeTranspose operand perm, nograd)
   unsafeReshape   (primal -> operand)      = Reverse (unsafeReshape   operand,      nograd)
@@ -189,6 +195,40 @@ instance {-# OVERLAPPABLE #-} ShapeOp r t => ShapeOp (Reverse r) t where
   unsafeConcat dims (primal -> lhs) (primal -> rhs) = Reverse (unsafeConcat dims lhs rhs, nograd)
 
   splat i = Reverse (splat i, nograd)
+instance ShapeOp r Word8 => ShapeOp (Reverse r) Word8 where
+  unsafeBroadcast (primal -> operand) dims = Reverse (unsafeBroadcast operand dims, nograd)
+  unsafeTranspose (primal -> operand) perm = Reverse (unsafeTranspose operand perm, nograd)
+  unsafeReshape   (primal -> operand)      = Reverse (unsafeReshape   operand,      nograd)
+  unsafeSlice     (primal -> operand) slic = Reverse (unsafeSlice     operand slic, nograd)
+  unsafePad value (primal -> operand) padd = Reverse (unsafePad value operand padd, nograd)
+  unsafeReverse   (primal -> operand) dims = Reverse (unsafeReverse   operand dims, nograd)
+
+  unsafeGather    (primal -> operand) (primal -> starts) offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes =
+    Reverse (unsafeGather operand starts offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes, nograd)
+  unsafeScatter   (primal -> operand) (primal -> scatterIndex) (primal -> update) uwd iwd sdtod ivd =
+    Reverse (unsafeScatter operand scatterIndex update uwd iwd sdtod ivd, nograd)
+  
+  unsafeConcat dims (primal -> lhs) (primal -> rhs) = Reverse (unsafeConcat dims lhs rhs, nograd)
+
+  splat i = Reverse (splat i, nograd)
+instance ShapeOp r Bool => ShapeOp (Reverse r) Bool where
+  unsafeBroadcast (primal -> operand) dims = Reverse (unsafeBroadcast operand dims, nograd)
+  unsafeTranspose (primal -> operand) perm = Reverse (unsafeTranspose operand perm, nograd)
+  unsafeReshape   (primal -> operand)      = Reverse (unsafeReshape   operand,      nograd)
+  unsafeSlice     (primal -> operand) slic = Reverse (unsafeSlice     operand slic, nograd)
+  unsafePad value (primal -> operand) padd = Reverse (unsafePad value operand padd, nograd)
+  unsafeReverse   (primal -> operand) dims = Reverse (unsafeReverse   operand dims, nograd)
+
+  unsafeGather    (primal -> operand) (primal -> starts) offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes =
+    Reverse (unsafeGather operand starts offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes, nograd)
+  unsafeScatter   (primal -> operand) (primal -> scatterIndex) (primal -> update) uwd iwd sdtod ivd =
+    Reverse (unsafeScatter operand scatterIndex update uwd iwd sdtod ivd, nograd)
+  
+  unsafeConcat dims (primal -> lhs) (primal -> rhs) = Reverse (unsafeConcat dims lhs rhs, nograd)
+
+  splat i = Reverse (splat i, nograd)
+
+
 
 -- MathOp
 differentiableUnsafeReduceMul :: forall r t s0 s1. (ShapeOp r t, MathOp r t, Fractional (r s0 t), Num (r s1 t), T s0 t, T s1 t, Num t) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
@@ -305,7 +345,25 @@ instance (MathOp r Float, forall s. KnownShape s => Fractional (r s Float)) => M
   unsafeDotGeneral = differentiableUnsafeDotGeneral
   unsafeConvolution = differentiableUnsafeConvolution
 
-instance {-# OVERLAPPABLE #-} MathOp r t => MathOp (Reverse r) t where
+instance MathOp r Int64 => MathOp (Reverse r) Int64 where
+  linspace r = Reverse (linspace r, const zero)
+  unsafeIota dims = Reverse (unsafeIota dims, const zero)
+
+  unsafeReduceMul (Reverse (f, _)) dims = Reverse (unsafeReduceMul f dims, const zero)
+  unsafeReduceAdd (Reverse (f, _)) dims = Reverse (unsafeReduceAdd f dims, const zero)
+  unsafeDotGeneral (Reverse (f, _)) (Reverse (g, _)) attr = Reverse (unsafeDotGeneral f g attr, const zero)
+  unsafeConvolution (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (unsafeConvolution lhs rhs, const zero)
+
+instance MathOp r Word8 => MathOp (Reverse r) Word8 where
+  linspace r = Reverse (linspace r, const zero)
+  unsafeIota dims = Reverse (unsafeIota dims, const zero)
+
+  unsafeReduceMul (Reverse (f, _)) dims = Reverse (unsafeReduceMul f dims, const zero)
+  unsafeReduceAdd (Reverse (f, _)) dims = Reverse (unsafeReduceAdd f dims, const zero)
+  unsafeDotGeneral (Reverse (f, _)) (Reverse (g, _)) attr = Reverse (unsafeDotGeneral f g attr, const zero)
+  unsafeConvolution (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (unsafeConvolution lhs rhs, const zero)
+
+instance MathOp r Bool => MathOp (Reverse r) Bool where
   linspace r = Reverse (linspace r, const zero)
   unsafeIota dims = Reverse (unsafeIota dims, const zero)
 
@@ -315,11 +373,11 @@ instance {-# OVERLAPPABLE #-} MathOp r t => MathOp (Reverse r) t where
   unsafeConvolution (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (unsafeConvolution lhs rhs, const zero)
 
 -- SelectOp
-differentiableBranch :: forall r t s. (SelectOp r t, T s t, Num (r s t)) => Reverse r s t -> Reverse r s t -> Reverse r '[] Pred -> Reverse r s t
+differentiableBranch :: forall r t s. (SelectOp r t, T s t, Num (r s t)) => Reverse r s t -> Reverse r s t -> Reverse r '[] Bool -> Reverse r s t
 differentiableBranch (Reverse (f, f')) (Reverse (t, t')) (Reverse (cond, _)) = 
     Reverse (branch f t cond, \i -> f' (branch i 0 cond) <+> t' (branch 0 i cond))
 
-differentiableSelect :: forall r t s. (SelectOp r t, T s t, Num (r s t)) => Reverse r s t -> Reverse r s t -> Reverse r s Pred -> Reverse r s t
+differentiableSelect :: forall r t s. (SelectOp r t, T s t, Num (r s t)) => Reverse r s t -> Reverse r s t -> Reverse r s Bool -> Reverse r s t
 differentiableSelect (Reverse (f, f')) (Reverse (t, t')) (Reverse (cond, _)) = 
     Reverse (select f t cond, \i -> f' (select i 0 cond) <+> t' (select 0 i cond))
 
@@ -327,11 +385,22 @@ instance (SelectOp r Float, forall s. KnownShape s => Num (r s Float)) => Select
   branch = differentiableBranch
   select = differentiableSelect
 
-instance {-# OVERLAPPABLE #-} SelectOp r t => SelectOp (Reverse r) t where
+instance SelectOp r Int64 => SelectOp (Reverse r) Int64 where
   branch (Reverse (f, _)) (Reverse (t, _)) (Reverse (cond, _)) =
-    Reverse (branch f t cond, const zero)
+    Reverse (branch f t cond, nograd)
   select (Reverse (f, _)) (Reverse (t, _)) (Reverse (cond, _)) =
-    Reverse (select f t cond, const zero)
+    Reverse (select f t cond, nograd)
+instance SelectOp r Word8 => SelectOp (Reverse r) Word8 where
+  branch (Reverse (f, _)) (Reverse (t, _)) (Reverse (cond, _)) =
+    Reverse (branch f t cond, nograd)
+  select (Reverse (f, _)) (Reverse (t, _)) (Reverse (cond, _)) =
+    Reverse (select f t cond, nograd)
+instance SelectOp r Bool => SelectOp (Reverse r) Bool where
+  branch (Reverse (f, _)) (Reverse (t, _)) (Reverse (cond, _)) =
+    Reverse (branch f t cond, nograd)
+  select (Reverse (f, _)) (Reverse (t, _)) (Reverse (cond, _)) =
+    Reverse (select f t cond, nograd)
+
 -- Comparison
 instance EqualOp r t => EqualOp (Reverse r) t where
   isEQ (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (isEQ lhs rhs, const zero)
@@ -351,13 +420,31 @@ instance (T s t, TraceableElement (r s t)) => TraceableElement (Reverse r s t) w
 type instance JitTransform (Reverse r s t) = Tensor s t
 
 -- Reversable
-class Cotangent (ReversedType r) => Reversable r where
+class Reversable r where
   type ReversedType r
   constructReverse :: CIntPtr -> ReversedType r -> (CIntPtr, r)
   gradReify :: Proxy r -> CIntPtr -> Gradient -> (CIntPtr, ReversedType r, Gradient)
 
-instance Cotangent (r s t) => Reversable (Reverse r s t) where
-  type ReversedType (Reverse r s t) = r s t
+instance (ShapeOp r Bool, KnownShape s) => Reversable (Reverse r s Bool) where
+  type ReversedType (Reverse r s Bool) = r s Bool
+  constructReverse i t = (i + 1, Reverse (t, nograd))
+  gradReify _ i (Gradient gs) = (i + 1, splat False, g')
+    where (_, Gradient -> g') = partition ((i ==) . fst) gs
+
+instance (ShapeOp r Int64, KnownShape s) => Reversable (Reverse r s Int64) where
+  type ReversedType (Reverse r s Int64) = r s Int64
+  constructReverse i t = (i + 1, Reverse (t, nograd))
+  gradReify _ i (Gradient gs) = (i + 1, splat 0, g')
+    where (_, Gradient -> g') = partition ((i ==) . fst) gs
+
+instance (ShapeOp r Word8, KnownShape s) => Reversable (Reverse r s Word8) where
+  type ReversedType (Reverse r s Word8) = r s Word8
+  constructReverse i t = (i + 1, Reverse (t, nograd))
+  gradReify _ i (Gradient gs) = (i + 1, splat 0, g')
+    where (_, Gradient -> g') = partition ((i ==) . fst) gs
+
+instance Cotangent (r s Float) => Reversable (Reverse r s Float) where
+  type ReversedType (Reverse r s Float) = r s Float
   constructReverse i t = (i + 1, Reverse (t, independent i))
   gradReify _ i (Gradient gs) = (i + 1, sum (fromDyn' <$> g), g')
     where (fmap snd -> g, Gradient -> g') = partition ((i ==) . fst) gs
@@ -392,7 +479,6 @@ instance (Reversable j, ReverseMode (a -> b)) => ReverseMode (j -> (a -> b)) whe
   rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i -> (i', g, g')) = g :&: rgradReify (Annotated i' :: Annotated CIntPtr (a -> b)) g'
 
 type RGrad f = Rev (GradResult f) f
+
 rgrad :: forall f. ReverseMode f => f -> RGrad f
 rgrad = rgrad' (rgradReify (Annotated 0 :: Annotated CIntPtr f), 0)
--- TODO: Implement General
-
