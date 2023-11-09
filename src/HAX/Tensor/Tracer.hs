@@ -8,7 +8,6 @@ import Prelude hiding (lookup)
 import HAX.Tensor.Tensorial
 
 import Control.Exception
-import Control.Monad.Primitive
 
 import Data.IntMap.Strict hiding (singleton, null, map, foldl)
 import Data.List (singleton)
@@ -19,7 +18,6 @@ import Foreign
 
 import GHC.StableName
 import GHC.TypeLits
-import GHC.IO.Unsafe
 
 import MLIR
 
@@ -154,6 +152,7 @@ instance (T s t, Floating t) => Floating (Tracer s t) where
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 -- For tracing
+-- TODO: Put somewhere else
 instance T s t => TraceableElement (Tracer s t) where
   constructTracer i = (i + 1, Tracer $ \ a -> (a, ) <$> blockArg i, [_type])
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
@@ -211,6 +210,7 @@ unsafeReduceTracer operand body (splat -> initvalue :: Tracer '[] t) dims = mkTr
   where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
         _dims = ReduceDims (fromInteger <$> dims)
         scalar = tensorType' (Proxy :: Proxy (Tracer '[] t))
+
 
 instance Tensorial t => ShapeOp Tracer t where
   unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t

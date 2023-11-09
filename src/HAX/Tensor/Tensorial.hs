@@ -15,7 +15,6 @@ import HAX.PjRt.BufferType
 import HAX.Utils
 
 import Data.IntMap.Strict (IntMap, empty)
-import Data.Primitive.ByteArray
 import Data.Kind 
 import Data.Proxy
 import Data.Reflection
@@ -379,8 +378,8 @@ tensorType _ = RankedTensorType shape _type NullAttr
 tensorType' :: T s t => Proxy (a s t) -> AnyType 
 tensorType' = toAnyType . tensorType
 
-
-
+class (Tensorial f, Tensorial g) => ConvertOp (r :: Shape -> Type -> Type) f g where
+  convert :: KnownShape s => r s f -> r s g
 
 class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
   -- without type checking, internal use only

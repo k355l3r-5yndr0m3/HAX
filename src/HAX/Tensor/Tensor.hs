@@ -68,6 +68,9 @@ tensorToPrimArray :: Tensor s t -> PrimArray (StorageType t)
 tensorToPrimArray (Tensor buffer) = unsafePerformIO $ conv <$> bufferToHostBuffer buffer
   where conv (ByteArray a) = PrimArray a
 
+tensorToHostBuffer :: Tensor s t -> IO (Int, Ptr (StorageType t))
+tensorToHostBuffer (Tensor buffer) = bufferToHostBuffer' buffer
+
 tensorFromHostBufferGC :: forall s t. T s t => Device -> Ptr (StorageType t) -> IO (Tensor s t)
 tensorFromHostBufferGC device hostBuffer = Tensor <$>
   clientBufferFromHostBufferGC client hostBuffer (pjrtBufferType p) (Shape shape) device

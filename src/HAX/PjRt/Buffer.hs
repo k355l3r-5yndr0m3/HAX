@@ -5,6 +5,7 @@ module HAX.PjRt.Buffer (
 --  bufferDestroy 
   bufferDestroy__ptr
 , bufferToHostBuffer
+, bufferToHostBuffer'
 , bufferDimensions
 ) where
 
@@ -25,6 +26,8 @@ foreign import ccall unsafe "buffer_to_host_buffer__get_dst_size"
   c__bufferToHostBuffer__getDstSize :: Ptr Api -> Ptr Buffer -> Ptr MemoryLayout -> IO CSize
 foreign import ccall unsafe "buffer_to_host_buffer__event_await"
   c__bufferToHostBuffer__eventAwait :: Ptr Api -> Ptr Buffer -> Ptr MemoryLayout -> MutableByteArray# RealWorld -> CSize -> IO () 
+foreign import ccall unsafe "buffer_to_host_buffer__event_await"
+  c__bufferToHostBuffer__eventAwait' :: Ptr Api -> Ptr Buffer -> Ptr MemoryLayout -> Ptr a -> CSize -> IO () 
 
 bufferToHostBuffer :: Ptr Api -> Ptr Buffer -> IO ByteArray
 bufferToHostBuffer api buffer = do 
@@ -32,6 +35,13 @@ bufferToHostBuffer api buffer = do
   MutableByteArray dst# <- newByteArray $ fromIntegral dstSize
   c__bufferToHostBuffer__eventAwait api buffer nullPtr dst# dstSize 
   unsafeFreezeByteArray (MutableByteArray dst#)
+
+bufferToHostBuffer' :: Ptr Api -> Ptr Buffer -> IO (Int, Ptr a)
+bufferToHostBuffer' api buffer = do 
+  bufferSize <- c__bufferToHostBuffer__getDstSize api buffer nullPtr
+  hostBuffer <- mallocBytes $ fromIntegral bufferSize
+  c__bufferToHostBuffer__eventAwait' api buffer nullPtr hostBuffer bufferSize
+  return (fromIntegral bufferSize, hostBuffer)
 
 foreign import ccall unsafe "buffer_dimensions"
   c__bufferDimensions :: Ptr Api -> Ptr Buffer -> Ptr CSize -> IO (Ptr Int64)

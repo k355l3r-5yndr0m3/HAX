@@ -1,24 +1,24 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE ViewPatterns #-}
 module Main (main) where
+
+import Codec.Picture
 
 import HAX.Tensor
 import HAX.PjRt 
 import HAX.AD
-import HAX.AD.Reverse
 import HAX.Target
 import HAX.Jit
-import HAX.AD.Numerical
 import HAX.Utils
-
-import Type.Reflection
-
-import System.Random
+import HAX.IO
 
 import Data.Proxy
-import Data.Word
 import Data.Int
+import Data.Word
+
+
 
 test1 :: Target Tracer '[5] Float -> Target Tracer '[5] Float -> Target Tracer '[5] Float 
 test1 = (+)
@@ -217,5 +217,13 @@ main = do
   print (jit test28 0 (1 + unsafeIota 0))
   print (jit test29 0 (1 + unsafeIota 0))
   
+
+  either putStrLn (\(tensorFromImage . convertRGB8 -> image :: Tensor [256, 256, 3] Word8) -> do
+    undefined) =<< readImage "test/data/image.jpg"
+
+
+
+
+
   clientDestroy client
   return ()
