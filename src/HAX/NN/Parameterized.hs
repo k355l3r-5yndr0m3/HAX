@@ -17,7 +17,7 @@ instance Parameterized (a -> b) where
   feed = id
 
 data Dense r (i :: Nat) (o :: Nat) t = Dense (r [i, o] t) (r '[o] t) 
-instance (MathOp r t, Num (r '[o] t), KnownNat i, KnownNat o) => Parameterized (Dense r i o t) where
+instance (MathOp r, MathConstr r t, Num (r '[o] t), KnownNat i, KnownNat o, Tensorial t, Num t) => Parameterized (Dense r i o t) where
   type Input (Dense r i o t)  = r '[i] t
   type Output (Dense r i o t) = r '[o] t
   feed (Dense weights biases) feats = biases + linearMap weights feats
@@ -30,13 +30,13 @@ instance Floating (r s t) => Parameterized (Sigmoid r s t) where
   feed _ = sigmoid
 
 data ReLU r (s :: Shape) t = Relu
-instance (SelectOp r t, OrderOp r t, T s t, Num (r s t)) => Parameterized (ReLU r s t) where
+instance (SelectOp r t, OrderOp r, T s t, Num (r s t)) => Parameterized (ReLU r s t) where
   type Input (ReLU r s t)  = r s t
   type Output (ReLU r s t) = r s t
   feed _ = relu
 
 newtype LeakyReLU r (s :: Shape) t = LeakyReLU (r '[] t)
-instance (Num (r s t), SelectOp r t, KnownShape s, OrderOp r t, ShapeOp r t) => Parameterized (LeakyReLU r s t) where
+instance (Num (r s t), ShapeConstr r t, SelectOp r t, KnownShape s, OrderOp r, ShapeOp r) => Parameterized (LeakyReLU r s t) where
   type Input (LeakyReLU r s t)  = r s t
   type Output (LeakyReLU r s t) = r s t
   feed (LeakyReLU alpha) = leakyrelu alpha

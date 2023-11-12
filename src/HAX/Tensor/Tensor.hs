@@ -188,7 +188,7 @@ instance (T s t, Floating t) => Floating (Tensor s t) where
 instance ConvertOp Tensor where
   convert = jit convert
 
-instance Tensorial t => ShapeOp Tensor t where
+instance ShapeOp Tensor where
   unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand
   unsafeTranspose operand perm = jit (`unsafeTranspose` perm) operand
   unsafeReshape = jit unsafeReshape
@@ -202,8 +202,7 @@ instance Tensorial t => ShapeOp Tensor t where
 
   splat a = unsafePerformIO $ tensorSplat defaultDevice a
 
-instance (Num t, Tensorial t) => MathOp Tensor t where
-  linspace :: forall n. (KnownNat n, Fractional t, Enum t) => (t, t) -> Tensor '[n] t
+instance MathOp Tensor where
   linspace = jit . linspace
 
   unsafeDotGeneral lhs rhs attr = jit (\ _lhs _rhs -> unsafeDotGeneral _lhs _rhs attr) lhs rhs
@@ -221,6 +220,6 @@ instance Tensorial t => SelectOp Tensor t where
   select = jit select
 
 
-instance Tensorial t => EqualOp Tensor t where
+instance EqualOp Tensor where
   isEQ = jit isEQ
   isNE = jit isNE
