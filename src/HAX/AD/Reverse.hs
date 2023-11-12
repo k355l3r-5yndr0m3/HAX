@@ -31,7 +31,6 @@ import Data.Maybe (fromJust)
 --       Slightly more safe and more performance
 -- TODO: Use pattern syn 
 -- TODO: Remove overlapping instances
-type G r s t = r s t -> Gradient
 newtype Reverse r s t = Reverse (r s t, G r s t)
 primal :: Reverse r s t -> r s t 
 primal (Reverse t) = fst t
@@ -179,103 +178,15 @@ instance ConvertOp r => ConvertOp (Reverse r) where
 
 -- TODO: function signature is inelegant 
 --       maybe just r s t -> Gradient instead of Reverse r s t
-class (ShapeOp r, Tensorial t) => DifferentiableShapeOp (r :: Shape -> Type -> Type) (t :: Type) where
-  unsafeBroadcastGrad :: (T s0 t, T s1 t) => G r s0 t -> [Integer] -> r s1 t -> Gradient
-  unsafeBroadcastGrad _ _ = nograd
-  unsafeTransposeGrad :: (T s0 t, T s1 t) => G r s0 t -> [Integer] -> r s1 t -> Gradient
-  unsafeTransposeGrad _ _ = nograd
-
-  unsafeReshapeGrad   :: (T s0 t, T s1 t) => G r s0 t -> r s1 t -> Gradient
-  unsafeReshapeGrad _ = nograd
-
-  unsafeSliceGrad     :: (T s0 t, T s1 t) => G r s0 t -> [(Integer, Integer, Integer)] -> r s1 t -> Gradient
-  unsafeSliceGrad _ _ = nograd
-  unsafePadGrad       :: (T s0 t, T s1 t) => G r s0 t -> [(Integer, Integer, Integer)] -> r s1 t -> Gradient
-  unsafePadGrad _ _ = nograd
-
-  unsafeReverseGrad   :: T s0 t => G r s0 t -> [Integer] -> r s0 t -> Gradient
-  unsafeReverseGrad _ _ = nograd
-
-  unsafeScatterGrad   :: (T s0 t, T s1 t, T s2 t) => G r s0 t -> r s1 Int64 -> G r s2 t -> [Integer] -> [Integer] -> [Integer] -> Integer -> r s0 t -> Gradient
-  unsafeScatterGrad _ _ _ _ _ _ _ = nograd
-  unsafeGatherGrad    :: (T s0 t, T s1 t, T s2 t) => G r s0 t -> r s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> r s2 t -> Gradient
-  unsafeGatherGrad _ _ _ _ _ _ = nograd
-
-  unsafeConcatGrad    :: (T s0 t, T s1 t, T s2 t) => Integer -> G r s0 t -> G r s1 t -> r s2 t -> Gradient
-  unsafeConcatGrad _ _ _ = nograd
 
 
 -- Warning: if in unsafeGather clipping occure, the gradient will not be correct
 -- TODO: Fix by adding manual clipping
-instance (MathOp r, MathConstr r Float, ShapeConstr r Float) => DifferentiableShapeOp r Float where
-  unsafeBroadcastGrad :: forall s0 s1. (KnownShape s0, KnownShape s1) => G r s0 Float -> [Integer] -> r s1 Float -> Gradient
-  unsafeBroadcastGrad f' dims i = 
-    reifyShape reduceResult $ \(same (unsafeReduceAdd i reduceDims) -> reduced) -> 
-      f' $ unsafeTranspose reduced perm
-    where same :: KnownShape s => r s t -> Proxy s -> r s t
-          same = const 
-          r1 = shapeRank (Proxy :: Proxy s1)
-          s1 = shapeVal  (Proxy :: Proxy s1)
-          reduceDims   = [0..r1 - 1] \\ dims
-          reduceResult = (s1 !!) . fromInteger <$> dims 
-          perm = 
-            let sorted = sort dims
-                assocs = zip sorted [0..]
-                permed = fmap (`lookup` assocs) dims
-            in  fromJust <$> permed
-
-  unsafeTransposeGrad f' perm i = f' (unsafeTranspose i perm')
-    where perm' = map snd $ sortOn fst $ zip perm [0..] 
-
-  unsafeReshapeGrad f' i = f' $ unsafeReshape i
-
-  unsafeSliceGrad :: forall s0 s1. (KnownShape s0, KnownShape s1) => G r s0 Float -> [(Integer, Integer, Integer)] -> r s1 Float -> Gradient
-  unsafeSliceGrad f' slicing i = f' $ unsafePad 0 i (zip3 starts higher interior)
-    where (starts, _, strides) = unzip3 slicing
-          interior = fmap (+(-1)) strides
-          higher   = zipWith4 (\low axis st tot -> tot - low - (axis - 1) * st - 1) starts (shapeVal (Proxy :: Proxy s1)) strides (shapeVal (Proxy :: Proxy s0))
-
-  unsafePadGrad :: forall s0 s1. (ShapeOp r, T s0 Float, T s1 Float) => G r s0 Float -> [(Integer, Integer, Integer)] -> r s1 Float -> Gradient
-  unsafePadGrad f' padding i = f' $ unsafeSlice i slicing
-    where (low, high, internal) = unzip3 padding
-          slicing = zipWith4 (\l h a j -> (l, a - h, j + 1)) low high s internal
-          s = shapeVal (Proxy :: Proxy s1)
-
-  unsafeReverseGrad :: forall s0. KnownShape s0 => G r s0 Float -> [Integer] -> r s0 Float -> Gradient
-  unsafeReverseGrad f' dims i = f' $ unsafeReverse i dims
-
-  unsafeGatherGrad f' g offsetAxes collapsedAxes startAxisMap idxVectorAxis i = 
-    f' $ unsafeScatter (splat 0) g i offsetAxes collapsedAxes startAxisMap idxVectorAxis
-
-  unsafeScatterGrad :: forall s0 s1 s2. (T s0 Float, T s1 Float, T s2 Float) => G r s0 Float -> r s1 Int64 -> G r s2 Float -> [Integer] -> [Integer] -> [Integer] -> Integer -> r s0 Float -> Gradient
-  unsafeScatterGrad f' g h' updateWindowAxes insertWindowAxes sdtod indexVecAxis i = lhs <+> rhs
-    where lhs = f' $ unsafeScatter i g (splat 0 :: r s2 Float) updateWindowAxes insertWindowAxes sdtod indexVecAxis 
-          rhs = h' $ unsafeGather  i g updateWindowAxes insertWindowAxes sdtod indexVecAxis sliceSizes
-          sliceSizes  = 
-            let generator :: [Integer] -> [Integer] -> [Integer]
-                generator a []     = a
-                generator a (j:js) = generator (let k = fromInteger j in take k a ++ 1 : drop k a) js
-            in  generator bounds $ sort insertWindowAxes
-          resultShape = shapeVal (Proxy :: Proxy s2)
-          bounds      = (resultShape !!) . fromInteger <$> updateWindowAxes
-
-  unsafeConcatGrad :: forall s0 s1 s2. (KnownShape s0, KnownShape s1, KnownShape s2) => Integer -> G r s0 Float -> G r s1 Float -> r s2 Float -> Gradient
-  unsafeConcatGrad dims f' g' i =
-    f' (unsafeSlice i lhsSlicing) <+> g' (unsafeSlice i rhsSlicing)
-    where lhsSlicing = (0, , 1) <$> shapeVal (Proxy :: Proxy s0)
-          offs = shapeVal (Proxy :: Proxy s0) !! fromInteger dims
-          limt = shapeVal (Proxy :: Proxy s2) !! fromInteger dims
-          rhsSlicing = [if d == dims then (offs, limt, 1) else (0, s, 1) | (d, s) <- zip [0..] $ shapeVal (Proxy :: Proxy s1)]
-
-instance ShapeOp r => DifferentiableShapeOp r Int64
-instance ShapeOp r => DifferentiableShapeOp r Word8
-instance ShapeOp r => DifferentiableShapeOp r Bool
 
 -- TODO: Maybe add a type class (or whatever it is called) instead of this constraint, a litle safer
 -- NOTE: This is strange, this constraint require undiciable instance if Reverse is constrained to Reverse (r :: Shape -> Type -> Type) (s :: Shape) (t :: Type)
 --        Why? (More reason to do the above)
 instance ShapeOp r => ShapeOp (Reverse r) where
-  type ShapeConstr (Reverse r) t = (DifferentiableMathOp r t, ShapeConstr r t)
   unsafeBroadcast (R f f') dims = R (unsafeBroadcast f dims) (unsafeBroadcastGrad f' dims)
   unsafeTranspose (R f f') perm = R (unsafeTranspose f perm) (unsafeTransposeGrad f' perm)
   unsafeReshape   (R f f')      = R (unsafeReshape   f)      (unsafeReshapeGrad   f')
@@ -467,22 +378,22 @@ instance ShapeOp r => ShapeOp (Reverse r) where
 --         spatials = [1..fromIntegral $ length rhsShape - 2]
 --         dims     = [0..fromIntegral $ length rhsShape - 1]
 
-class (DifferentiableShapeOp r t, MathOp r) => DifferentiableMathOp (r :: Shape -> Type -> Type) (t :: Type) where
-  unsafeDotGeneralGrad :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> G r s0 t -> r s1 t -> G r s1 t -> DotDimensionNumbersAttr -> G r s2 t
+class DifferentiableMathOp (t :: Type) where
+  unsafeDotGeneralGrad :: (MathOp r, KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> G r s0 t -> r s1 t -> G r s1 t -> DotDimensionNumbersAttr -> G r s2 t
   unsafeDotGeneralGrad _ _ _ _ _ = nograd
 
-  unsafeReduceAddGrad :: (KnownShape s0, KnownShape s1) => G r s0 t -> [Integer] -> G r s1 t
+  unsafeReduceAddGrad :: (MathOp r, KnownShape s0, KnownShape s1) => G r s0 t -> [Integer] -> G r s1 t
   unsafeReduceAddGrad _ _ = nograd
 
-  unsafeReduceMulGrad :: (KnownShape s0, KnownShape s1) => r s0 t -> G r s0 t -> [Integer] -> G r s1 t
+  unsafeReduceMulGrad :: (MathOp r, KnownShape s0, KnownShape s1, Fractional (r s0 Float), Num (r s1 Float)) => r s0 t -> G r s0 t -> [Integer] -> G r s1 t
   unsafeReduceMulGrad _ _ _ = nograd
 
-  unsafeConvolutionGrad :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> G r s0 t -> r s1 t -> G r s1 t -> G r s2 t
+  unsafeConvolutionGrad :: (MathOp r, KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> G r s0 t -> r s1 t -> G r s1 t -> G r s2 t
   unsafeConvolutionGrad _ _ _ _ = nograd
 
 -- TODO: Implement PairwiseOp so this will no be so unsafe
-instance (MathOp r, MathConstr r Float, ShapeConstr r Float, forall s. KnownShape s => Fractional (r s Float)) => DifferentiableMathOp r Float where 
-  unsafeDotGeneralGrad :: forall s0 s1 s2. (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 Float -> G r s0 Float -> r s1 Float -> G r s1 Float -> DotDimensionNumbersAttr -> G r s2 Float
+instance DifferentiableMathOp Float where 
+  unsafeDotGeneralGrad :: forall s0 s1 s2 r. (MathOp r, KnownShape s0, KnownShape s1, KnownShape s2) => r s0 Float -> G r s0 Float -> r s1 Float -> G r s1 Float -> DotDimensionNumbersAttr -> G r s2 Float
   unsafeDotGeneralGrad f f' g g' attr i =
       let lhsShape     = fromInteger <$> shapeVal p0 :: Num i => [i] 
           rhsShape     = fromInteger <$> shapeVal p1 :: Num i => [i]
@@ -535,7 +446,7 @@ instance (MathOp r, MathConstr r Float, ShapeConstr r Float, forall s. KnownShap
           p0 :: Proxy s0 = Proxy
           p1 :: Proxy s1 = Proxy
 
-  unsafeReduceAddGrad :: forall s0 s1. (KnownShape s0, KnownShape s1) => G r s0 Float -> [Integer] -> G r s1 Float
+  unsafeReduceAddGrad :: forall s0 s1 r. (ShapeOp r, KnownShape s0, KnownShape s1) => G r s0 Float -> [Integer] -> G r s1 Float
   unsafeReduceAddGrad f' dims i = f' $ unsafeBroadcast i _map
     where _map = 
             let generator :: (Integer, [Integer], Integer) -> [Integer]
@@ -543,7 +454,7 @@ instance (MathOp r, MathConstr r Float, ShapeConstr r Float, forall s. KnownShap
                 generator (lower, a:as, upper) = [lower..a - 1] ++ generator (a + 1, as, upper)
             in  generator (0, dims, shapeRank (Proxy :: Proxy s0) - 1)
 
-  unsafeReduceMulGrad :: forall s0 s1. (KnownShape s0, KnownShape s1) => r s0 Float -> G r s0 Float -> [Integer] -> G r s1 Float
+  unsafeReduceMulGrad :: forall s0 s1 r. (MathOp r, KnownShape s0, KnownShape s1, Fractional (r s0 Float), Num (r s1 Float)) => r s0 Float -> G r s0 Float -> [Integer] -> G r s1 Float
   unsafeReduceMulGrad f f' dims i =
       let _map = 
             let generator :: (Integer, [Integer], Integer) -> [Integer]
@@ -553,7 +464,7 @@ instance (MathOp r, MathConstr r Float, ShapeConstr r Float, forall s. KnownShap
       in  f' (unsafeBroadcast (i * g) _map / f)
     where g = unsafeReduceMul f dims
 
-  unsafeConvolutionGrad :: forall s0 s1 s2. (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 Float -> G r s0 Float -> r s1 Float -> G r s1 Float -> G r s2 Float
+  unsafeConvolutionGrad :: forall s0 s1 s2 r. (MathOp r, KnownShape s0, KnownShape s1, KnownShape s2) => r s0 Float -> G r s0 Float -> r s1 Float -> G r s1 Float -> G r s2 Float
   unsafeConvolutionGrad f f' g g' i = f' inputGradient <+> g' kernelGradient
     where inputGradient :: r s0 Float
           inputGradient = 
@@ -583,13 +494,12 @@ instance (MathOp r, MathConstr r Float, ShapeConstr r Float, forall s. KnownShap
           spatials = [1..fromIntegral $ length rhsShape - 2]
           dims     = [0..fromIntegral $ length rhsShape - 1]
 
-instance (DifferentiableShapeOp r Int64, MathOp r) => DifferentiableMathOp r Int64
-instance (DifferentiableShapeOp r Word8, MathOp r) => DifferentiableMathOp r Word8
-instance (DifferentiableShapeOp r Bool, MathOp r)  => DifferentiableMathOp r Bool
+instance DifferentiableMathOp Int64
+instance DifferentiableMathOp Word8
+instance DifferentiableMathOp Bool
 
 
-instance (forall t. DifferentiableMathOp r t, MathOp r) => MathOp (Reverse r) where
-  type MathConstr (Reverse r) t = (DifferentiableMathOp r t, MathConstr r t)
+instance MathOp r => MathOp (Reverse r) where
   linspace r = R (linspace r) nograd
   unsafeIota i = R (unsafeIota i) nograd
 

@@ -8,6 +8,7 @@ import Foreign.C
 
 -- TODO: Optimize
 newtype Gradient = Gradient [(CIntPtr, Dynamic)]
+type G r s t = r s t -> Gradient
 
 (<+>) :: Gradient -> Gradient -> Gradient
 (Gradient lhs) <+> (Gradient rhs) = Gradient (lhs ++ rhs)

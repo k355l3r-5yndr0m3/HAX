@@ -221,7 +221,6 @@ unsafeReduceTracer operand body (splat -> initvalue :: Tracer '[] t) dims = mkTr
 
 
 instance ShapeOp Tracer where
-  type ShapeConstr Tracer t = Tensorial t
   unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeBroadcast operand idxmap@(BroadcastMap . fmap fromInteger -> _map) = 
     assert correctness $ mkTracer $ do 
@@ -344,7 +343,6 @@ instance ShapeOp Tracer where
 
 
 instance MathOp Tracer where
-  type MathConstr Tracer t = Tensorial t
   -- TODO: Implement a better linspace
   linspace :: forall n t. (KnownNat n, Fractional t, Enum t, Tensorial t) => (t, t) -> Tracer '[n] t
   linspace (low, high) = splat step * unsafeIota 0

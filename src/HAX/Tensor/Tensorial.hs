@@ -13,6 +13,7 @@ import Prelude hiding (pred)
 import HAX.PjRt.BufferType
 
 import HAX.Utils
+import HAX.AD.Gradient
 
 import Data.IntMap.Strict (IntMap, empty)
 import Data.Kind 
@@ -21,6 +22,7 @@ import Data.Reflection
 import Data.Primitive
 import Data.Int
 import Data.Bifunctor
+import Data.List 
 
 import Foreign hiding (sizeOf)
 import Foreign.C (CIntPtr)
@@ -33,6 +35,7 @@ import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
 import Stablehlo.Dialect.Stablehlo.Attributes
 import Control.Exception (assert)
+import Data.Maybe (fromJust)
 
 -- Shape
 type Shape = [Nat]
@@ -401,44 +404,129 @@ class PairwiseOp (r :: Shape -> Type -> Type) where
 class ConvertOp (r :: Shape -> Type -> Type) where
   convert :: (T s f, T s g) => r s f -> r s g
 
+class Tensorial t => DifferentiableShapeOp t where
+  unsafeBroadcastGrad :: (MathOp r, T s0 t, T s1 t) => G r s0 t -> [Integer] -> r s1 t -> Gradient
+  unsafeBroadcastGrad _ _ = nograd
+  unsafeTransposeGrad :: (ShapeOp r, T s0 t, T s1 t) => G r s0 t -> [Integer] -> r s1 t -> Gradient
+  unsafeTransposeGrad _ _ = nograd
+
+  unsafeReshapeGrad   :: (ShapeOp r, T s0 t, T s1 t) => G r s0 t -> r s1 t -> Gradient
+  unsafeReshapeGrad _ = nograd
+
+  unsafeSliceGrad     :: (ShapeOp r, T s0 t, T s1 t) => G r s0 t -> [(Integer, Integer, Integer)] -> r s1 t -> Gradient
+  unsafeSliceGrad _ _ = nograd
+  unsafePadGrad       :: (ShapeOp r, T s0 t, T s1 t) => G r s0 t -> [(Integer, Integer, Integer)] -> r s1 t -> Gradient
+  unsafePadGrad _ _ = nograd
+
+  unsafeReverseGrad   :: (T s0 t, ShapeOp r) => G r s0 t -> [Integer] -> r s0 t -> Gradient
+  unsafeReverseGrad _ _ = nograd
+
+  unsafeScatterGrad   :: (ShapeOp r, T s0 t, T s1 t, T s2 t) => G r s0 t -> r s1 Int64 -> G r s2 t -> [Integer] -> [Integer] -> [Integer] -> Integer -> r s0 t -> Gradient
+  unsafeScatterGrad _ _ _ _ _ _ _ = nograd
+  unsafeGatherGrad    :: (ShapeOp r, T s0 t, T s1 t, T s2 t) => G r s0 t -> r s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> r s2 t -> Gradient
+  unsafeGatherGrad _ _ _ _ _ _ = nograd
+
+  unsafeConcatGrad    :: (ShapeOp r, T s0 t, T s1 t, T s2 t) => Integer -> G r s0 t -> G r s1 t -> r s2 t -> Gradient
+  unsafeConcatGrad _ _ _ = nograd
+instance DifferentiableShapeOp Float where
+  unsafeBroadcastGrad :: forall s0 s1 r. (MathOp r, KnownShape s0, KnownShape s1) => G r s0 Float -> [Integer] -> r s1 Float -> Gradient
+  unsafeBroadcastGrad f' dims i = 
+    reifyShape reduceResult $ \(same (unsafeReduceAdd i reduceDims) -> reduced) -> 
+      f' $ unsafeTranspose reduced perm
+    where same :: KnownShape s => r s t -> Proxy s -> r s t
+          same = const 
+          r1 = shapeRank (Proxy :: Proxy s1)
+          s1 = shapeVal  (Proxy :: Proxy s1)
+          reduceDims   = [0..r1 - 1] \\ dims
+          reduceResult = (s1 !!) . fromInteger <$> dims 
+          perm = 
+            let sorted = sort dims
+                assocs = zip sorted [0..]
+                permed = fmap (`lookup` assocs) dims
+            in  fromJust <$> permed
+
+  unsafeTransposeGrad f' perm i = f' (unsafeTranspose i perm')
+    where perm' = map snd $ sortOn fst $ zip perm [0..] 
+
+  unsafeReshapeGrad f' i = f' $ unsafeReshape i
+
+  unsafeSliceGrad :: forall s0 s1 r. (ShapeOp r, KnownShape s0, KnownShape s1) => G r s0 Float -> [(Integer, Integer, Integer)] -> r s1 Float -> Gradient
+  unsafeSliceGrad f' slicing i = f' $ unsafePad 0 i (zip3 starts higher interior)
+    where (starts, _, strides) = unzip3 slicing
+          interior = fmap (+(-1)) strides
+          higher   = zipWith4 (\low axis st tot -> tot - low - (axis - 1) * st - 1) starts (shapeVal (Proxy :: Proxy s1)) strides (shapeVal (Proxy :: Proxy s0))
+
+  unsafePadGrad :: forall s0 s1 r. (ShapeOp r, T s0 Float, T s1 Float) => G r s0 Float -> [(Integer, Integer, Integer)] -> r s1 Float -> Gradient
+  unsafePadGrad f' padding i = f' $ unsafeSlice i slicing
+    where (low, high, internal) = unzip3 padding
+          slicing = zipWith4 (\l h a j -> (l, a - h, j + 1)) low high s internal
+          s = shapeVal (Proxy :: Proxy s1)
+
+  unsafeReverseGrad :: forall s0 r. (KnownShape s0, ShapeOp r) => G r s0 Float -> [Integer] -> r s0 Float -> Gradient
+  unsafeReverseGrad f' dims i = f' $ unsafeReverse i dims
+
+  unsafeGatherGrad f' g offsetAxes collapsedAxes startAxisMap idxVectorAxis i = 
+    f' $ unsafeScatter (splat 0) g i offsetAxes collapsedAxes startAxisMap idxVectorAxis
+
+  unsafeScatterGrad :: forall s0 s1 s2 r. (ShapeOp r, T s0 Float, T s1 Float, T s2 Float) => G r s0 Float -> r s1 Int64 -> G r s2 Float -> [Integer] -> [Integer] -> [Integer] -> Integer -> r s0 Float -> Gradient
+  unsafeScatterGrad f' g h' updateWindowAxes insertWindowAxes sdtod indexVecAxis i = lhs <+> rhs
+    where lhs = f' $ unsafeScatter i g (splat 0 :: r s2 Float) updateWindowAxes insertWindowAxes sdtod indexVecAxis 
+          rhs = h' $ unsafeGather  i g updateWindowAxes insertWindowAxes sdtod indexVecAxis sliceSizes
+          sliceSizes  = 
+            let generator :: [Integer] -> [Integer] -> [Integer]
+                generator a []     = a
+                generator a (j:js) = generator (let k = fromInteger j in take k a ++ 1 : drop k a) js
+            in  generator bounds $ sort insertWindowAxes
+          resultShape = shapeVal (Proxy :: Proxy s2)
+          bounds      = (resultShape !!) . fromInteger <$> updateWindowAxes
+
+  unsafeConcatGrad :: forall s0 s1 s2 r. (ShapeOp r, KnownShape s0, KnownShape s1, KnownShape s2) => Integer -> G r s0 Float -> G r s1 Float -> r s2 Float -> Gradient
+  unsafeConcatGrad dims f' g' i =
+    f' (unsafeSlice i lhsSlicing) <+> g' (unsafeSlice i rhsSlicing)
+    where lhsSlicing = (0, , 1) <$> shapeVal (Proxy :: Proxy s0)
+          offs = shapeVal (Proxy :: Proxy s0) !! fromInteger dims
+          limt = shapeVal (Proxy :: Proxy s2) !! fromInteger dims
+          rhsSlicing = [if d == dims then (offs, limt, 1) else (0, s, 1) | (d, s) <- zip [0..] $ shapeVal (Proxy :: Proxy s1)]
+
+instance DifferentiableShapeOp Int64
+instance DifferentiableShapeOp Word8
+instance DifferentiableShapeOp Bool
 
 class ShapeOp (r :: Shape -> Type -> Type) where
-  type ShapeConstr r t :: Constraint
   -- without type checking, internal use only
   -- it is easy to detach type from reality
-  unsafeBroadcast    :: (ShapeConstr r t, T s0 t, T s1 t) => r s0 t -> [Integer] -> r s1 t
-  unsafeTranspose    :: (ShapeConstr r t, T s0 t, T s1 t) => r s0 t -> [Integer] -> r s1 t
-  unsafeReshape      :: (ShapeConstr r t, T s0 t, T s1 t) => r s0 t -> r s1 t 
-  unsafeSlice        :: (ShapeConstr r t, T s0 t, T s1 t) => r s0 t -> [(Integer, Integer, Integer)] -> r s1 t
+  unsafeBroadcast    :: (T s0 t, T s1 t, DifferentiableShapeOp t, MathOp r) => r s0 t -> [Integer] -> r s1 t
+  unsafeTranspose    :: (T s0 t, T s1 t, DifferentiableShapeOp t) => r s0 t -> [Integer] -> r s1 t
+  unsafeReshape      :: (T s0 t, T s1 t, DifferentiableShapeOp t) => r s0 t -> r s1 t 
+  unsafeSlice        :: (T s0 t, T s1 t, DifferentiableShapeOp t) => r s0 t -> [(Integer, Integer, Integer)] -> r s1 t
   
   -- TODO: Add user defined padding_value
-  unsafePad          :: (ShapeConstr r t, T s0 t, T s1 t) => t -> r s0 t -> [(Integer, Integer, Integer)] -> r s1 t
-  unsafeReverse      :: (ShapeConstr r t, T s0 t) => r s0 t -> [Integer] -> r s0 t
+  unsafePad          :: (T s0 t, T s1 t, DifferentiableShapeOp t) => t -> r s0 t -> [(Integer, Integer, Integer)] -> r s1 t
+  unsafeReverse      :: (T s0 t, DifferentiableShapeOp t) => r s0 t -> [Integer] -> r s0 t
 
   -- TODO: Add more test for these
-  unsafeScatter      :: (ShapeConstr r t, T s0 t, T s1 t, T s2 t) => r s0 t -> r s1 Int64 -> r s2 t -> [Integer] -> [Integer] -> [Integer] -> Integer -> r s0 t
-  unsafeGather       :: (ShapeConstr r t, T s0 t, T s1 t, T s2 t) => r s0 t -> r s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> [Integer] -> r s2 t
+  unsafeScatter      :: (T s0 t, T s1 t, T s2 t, DifferentiableShapeOp t) => r s0 t -> r s1 Int64 -> r s2 t -> [Integer] -> [Integer] -> [Integer] -> Integer -> r s0 t
+  unsafeGather       :: (T s0 t, T s1 t, T s2 t, DifferentiableShapeOp t) => r s0 t -> r s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> [Integer] -> r s2 t
 
   -- Concatination
-  unsafeConcat :: (ShapeConstr r t, T s0 t, T s1 t, T s2 t) => Integer -> r s0 t -> r s1 t -> r s2 t
+  unsafeConcat :: (T s0 t, T s1 t, T s2 t, DifferentiableShapeOp t) => Integer -> r s0 t -> r s1 t -> r s2 t
 
   -- TODO: Move this to a different class
   splat :: T s t => t -> r s t
 
-onehot :: forall r s c k. (ShapeConstr r Int64, MathConstr r Int64, MathOp r, EqualOp r, KnownShape s, KnownNat c, k ~ (s ++ '[c]), c ~ Last k, KnownShape k, s ~ Init k) => r s Int64 -> r k Bool
+onehot :: forall r s c k. (MathOp r, EqualOp r, KnownShape s, KnownNat c, k ~ (s ++ '[c]), c ~ Last k, KnownShape k, s ~ Init k, DifferentiableShapeOp Int64) => r s Int64 -> r k Bool
 onehot indices = isEQ c i
   where c :: r k Int64 = unsafeBroadcast indices [0..r - 1] 
         i :: r k Int64 = unsafeIota r
         r = shapeRank (Proxy :: Proxy s)
-  
 
 
-(@%) :: forall r t n ns. (ShapeConstr r t, ShapeOp r, KnownNat n, KnownShape ns, Num (r '[] Int64), Tensorial t) => r (n ': ns) t -> Integer -> r ns t
+(@%) :: forall r t n ns. (ShapeOp r, KnownNat n, KnownShape ns, Num (r '[] Int64), Tensorial t, DifferentiableShapeOp t) => r (n ': ns) t -> Integer -> r ns t
 operand @% (fromInteger -> index :: r '[] Int64) = unsafeGather operand index [0..resultRank - 1] [0] [0] 0 (1:resultShape)
   where resultRank  = shapeRank (Proxy :: Proxy ns)
         resultShape = shapeVal  (Proxy :: Proxy ns)
 
-unsafeDiagonal :: forall s0 s1 r t. (ShapeConstr r t, T s0 t, T s1 t, MathConstr r Int64, MathOp r) => Integer -> Integer -> r s0 t -> r s1 t
+unsafeDiagonal :: forall s0 s1 r t. (T s0 t, T s1 t, MathOp r, DifferentiableShapeOp t) => Integer -> Integer -> r s0 t -> r s1 t
 unsafeDiagonal keepAxes removeAxes input = assert (inputShape !! fromInteger keepAxes == inputShape !! fromInteger removeAxes) $ 
   reifyShape startShape result
   where inputShape = shapeVal (Proxy :: Proxy s0)
@@ -456,19 +544,19 @@ unsafeDiagonal keepAxes removeAxes input = assert (inputShape !! fromInteger kee
           in  unsafeGather input start offsetAxes collapsedAxes startIdxMap 1 sliceSize
 
 -- With type checking
-broadcast :: (ShapeConstr r t, Broadcast org map targ, ShapeOp r, Tensorial t) => r org t -> Proxy map -> r targ t
+broadcast :: (Broadcast org map targ, ShapeOp r, Tensorial t, DifferentiableShapeOp t) => r org t -> Proxy map -> r targ t
 broadcast operand (shapeVal -> _map) = unsafeBroadcast operand _map
 
-broadcast' :: forall r t org targ. (ShapeConstr r t, ShapeOp r, Tensorial t, Broadcast' org targ) => r org t -> r targ t
+broadcast' :: forall r t org targ. (ShapeOp r, Tensorial t, Broadcast' org targ, DifferentiableShapeOp t) => r org t -> r targ t
 broadcast' operand = unsafeBroadcast operand _map
   where targ = shapeVal (Proxy :: Proxy targ)
         org  = shapeVal (Proxy :: Proxy org)
         _map = take (length org) [fromIntegral (length targ - length org)..] 
 
-transpose :: (ShapeConstr r t, ShapeOp r, Tensorial t, Transpose operand perm result) => r operand t -> Proxy perm -> r result t
+transpose :: (ShapeOp r, Tensorial t, Transpose operand perm result, DifferentiableShapeOp t) => r operand t -> Proxy perm -> r result t
 transpose operand = unsafeTranspose operand . shapeVal
 
-reshape :: (ShapeConstr r t, ShapeOp r, Tensorial t, KnownShape s0, KnownShape s1, Reshapable s0 s1) => r s0 t -> r s1 t
+reshape :: (ShapeOp r, Tensorial t, KnownShape s0, KnownShape s1, Reshapable s0 s1, DifferentiableShapeOp t) => r s0 t -> r s1 t
 reshape = unsafeReshape
 
 
@@ -486,20 +574,18 @@ reshape = unsafeReshape
 
 -- TODO: Change integer to int (or int64)
 class ShapeOp r => MathOp r where
-  type MathConstr r t :: Constraint
-
-  unsafeDotGeneral  :: (MathConstr r t, T s0 t, T s1 t, T s2 t, Num t) => r s0 t -> r s1 t -> DotDimensionNumbersAttr -> r s2 t
-  unsafeReduceAdd   :: (MathConstr r t, T s0 t, T s1 t, Num t) => r s0 t -> [Integer] -> r s1 t
-  unsafeReduceMul   :: (MathConstr r t, T s0 t, T s1 t, Num t) => r s0 t -> [Integer] -> r s1 t
+  unsafeDotGeneral  :: (T s0 t, T s1 t, T s2 t, Num t) => r s0 t -> r s1 t -> DotDimensionNumbersAttr -> r s2 t
+  unsafeReduceAdd   :: (T s0 t, T s1 t, Num t) => r s0 t -> [Integer] -> r s1 t
+  unsafeReduceMul   :: (T s0 t, T s1 t, Num t) => r s0 t -> [Integer] -> r s1 t
 
   -- For padding, use explicitly pad the input, this simplify gradient calculation, similarly for dialation
-  unsafeConvolution :: (MathConstr r t, T s0 t, T s1 t, T s2 t) => r s0 t -> r s1 t -> r s2 t
-  unsafeIota        :: (MathConstr r t, T s t) => Integer -> r s t
+  unsafeConvolution :: (T s0 t, T s1 t, T s2 t) => r s0 t -> r s1 t -> r s2 t
+  unsafeIota        :: (T s t) => Integer -> r s t
 
   -- TODO: Move this to a different class
-  linspace :: (MathConstr r t, KnownNat n, Fractional t, Enum t, Tensorial t) => (t, t) -> r '[n] t
+  linspace :: (KnownNat n, Fractional t, Enum t, Tensorial t) => (t, t) -> r '[n] t
 
-  unsafeMultiIota :: forall s t. (MathConstr r t, T s t, ShapeConstr r t) => [Integer] -> Integer -> r s t
+  unsafeMultiIota :: forall s t. (T s t) => [Integer] -> Integer -> r s t
   unsafeMultiIota []     _ = error "idim needs to be given"
   unsafeMultiIota [a]    d = assert (shapeVal (Proxy :: Proxy s) !! fromInteger d == 1) unsafeIota a
   unsafeMultiIota (a:as) d = 
@@ -523,39 +609,39 @@ class ShapeOp r => MathOp r where
 
 
 
-iota :: (MathConstr r t, Iota d s, MathOp r, KnownShape s, KnownNat d, Tensorial t) => Proxy d -> r s t
+iota :: (Iota d s, MathOp r, KnownShape s, KnownNat d, Tensorial t) => Proxy d -> r s t
 iota = unsafeIota . natVal
 
-linearMap :: (MathConstr r t, MathOp r, KnownNat i, KnownNat o, Tensorial t, Num t) => r '[i, o] t -> r '[i] t -> r '[o] t 
+linearMap :: (MathOp r, KnownNat i, KnownNat o, Tensorial t, Num t) => r '[i, o] t -> r '[i] t -> r '[o] t 
 linearMap mat vec = unsafeDotGeneral mat vec dotAttr 
   where dotAttr = DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [(0, 0)] }
 
 -- Reduction
-reduceAdd :: (MathConstr r t, MathOp r, T s t, T s' t, KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
+reduceAdd :: (MathOp r, T s t, T s' t, KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
 reduceAdd operand = unsafeReduceAdd operand . shapeVal
 
-reduceAdd' :: forall r s t. (MathConstr r t, MathOp r, T s t, Num t) => r s t -> r '[] t
+reduceAdd' :: forall r s t. (MathOp r, T s t, Num t) => r s t -> r '[] t
 reduceAdd' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
 
-reduceMul :: (MathConstr r t, MathOp r, T s t, T s' t, KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
+reduceMul :: (MathOp r, T s t, T s' t, KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
 reduceMul operand = unsafeReduceMul operand . shapeVal
 
-reduceMul' :: forall r s t. (MathConstr r t, MathOp r, T s t, Num t) => r s t -> r '[] t
+reduceMul' :: forall r s t. (MathOp r, T s t, Num t) => r s t -> r '[] t
 reduceMul' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
 
 -- TODO: Implement + - * / etc with automatic broadcasting
-prod :: (MathConstr r t, MathOp r, TensorProductConstraint lhs rhs p, Tensorial t, Num t) => r lhs t -> r rhs t -> r p t
+prod :: (MathOp r, TensorProductConstraint lhs rhs p, Tensorial t, Num t) => r lhs t -> r rhs t -> r p t
 prod x y = unsafeDotGeneral x y attr
   where attr = DotDimensionNumbersAttr { getContractingDims = [], getBatchingDims = [] }
 
-matmul :: (MathConstr r t, MathOp r, T '[m, n] t, T '[n, p] t, T '[m, p] t, Num t) => r '[m, n] t -> r '[n, p] t -> r '[m, p] t
+matmul :: (MathOp r, T '[m, n] t, T '[n, p] t, T '[m, p] t, Num t) => r '[m, n] t -> r '[n, p] t -> r '[m, p] t
 matmul lhs rhs = unsafeDotGeneral lhs rhs attr
   where attr = DotDimensionNumbersAttr { getContractingDims = [(1, 0)], getBatchingDims = [] }
 
-convolution :: (MathConstr r t, Convolution input kernel output, MathOp r, Num t, Tensorial t) => r input t -> r kernel t -> r output t 
+convolution :: (Convolution input kernel output, MathOp r, Num t, Tensorial t) => r input t -> r kernel t -> r output t 
 convolution = unsafeConvolution
 
-convolution' :: forall input kernel output r t. (MathConstr r t, ShapeConstr r t, MathOp r, Tensorial t, Convolution' input kernel output) => r input t -> r kernel t -> r output t
+convolution' :: forall input kernel output r t. (MathOp r, Tensorial t, Convolution' input kernel output, DifferentiableShapeOp t) => r input t -> r kernel t -> r output t
 convolution' input kernel = unsafeReshape (unsafeConvolution input' kernel :: r (1 ': output) t)
   where input' = unsafeReshape input :: r (1 ': input) t
 
@@ -573,11 +659,11 @@ class EqualOp r => OrderOp r where
   isLT :: T s t => r s t -> r s t -> r s Bool
   isLE :: T s t => r s t -> r s t -> r s Bool
 
-(|#|) :: (MathConstr a t, Tensorial t, MathOp a, TensorProductConstraint l r p, Num t) => a l t -> a r t -> a p t
+(|#|) :: (Tensorial t, MathOp a, TensorProductConstraint l r p, Num t) => a l t -> a r t -> a p t
 (|#|) = prod
 infixl 9 |#|
 
-(|@|) :: (MathConstr r t, Tensorial t, MathOp r, KnownNat n, KnownNat m, KnownNat q, Num t) => r '[n, m] t -> r '[m, q] t -> r '[n, q] t
+(|@|) :: (Tensorial t, MathOp r, KnownNat n, KnownNat m, KnownNat q, Num t) => r '[n, m] t -> r '[m, q] t -> r '[n, q] t
 (|@|) = matmul
 infixl 8 |@|
 
@@ -599,13 +685,13 @@ infixl 8 |@|
 relu :: (SelectOp r t, KnownShape s, Num (r s t), OrderOp r) => r s t -> r s t
 relu x = select 0 x (x `isGT` 0)
 
-leakyrelu :: (ShapeConstr r t, Num (r s t), SelectOp r t, KnownShape s, OrderOp r, ShapeOp r) => r '[] t -> r s t -> r s t
+leakyrelu :: (Num (r s t), SelectOp r t, KnownShape s, OrderOp r, ShapeOp r, DifferentiableShapeOp t) => r '[] t -> r s t -> r s t
 leakyrelu alpha = leakyrelu' $ broadcast alpha (Proxy :: Proxy '[])
 
 leakyrelu' :: (Num (r s t), SelectOp r t, KnownShape s, OrderOp r) => r s t -> r s t -> r s t
 leakyrelu' alpha x = x * select alpha 1 (x `isGT` 0)
 
-l2Loss :: (MathConstr a t, MathOp a, KnownShape s, Num t, Num (a s t), Tensorial t) => a s t -> a '[] t
+l2Loss :: (MathOp a, KnownShape s, Num t, Num (a s t), Tensorial t) => a s t -> a '[] t
 l2Loss x = reduceAdd' $ x * x 
 
 sigmoid :: Floating a => a -> a
