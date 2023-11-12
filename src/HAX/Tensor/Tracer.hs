@@ -8,7 +8,6 @@ import Prelude hiding (lookup)
 import HAX.Tensor.Tensorial
 
 import Control.Exception
-import Control.Monad.Primitive
 
 import Data.IntMap.Strict hiding (singleton, null, map, foldl)
 import Data.List (singleton)
@@ -19,14 +18,22 @@ import Foreign
 
 import GHC.StableName
 import GHC.TypeLits
-import GHC.IO.Unsafe
 
 import MLIR
 
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
+import GHC.IsList
 
 newtype Tracer (s :: Shape) t = Tracer (IntMap Value -> BlockM (IntMap Value, Value))
+-- For tracing
+-- TODO: Put somewhere else
+instance T s t => TraceableElement (Tracer s t) where
+  constructTracer i = (i + 1, Tracer $ \ a -> (a, ) <$> blockArg i, [_type])
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
+  deconstructTracer u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 newtype TracerM a = TracerM (IntMap Value -> BlockM (IntMap Value, a))
 instance Functor TracerM where
@@ -44,6 +51,14 @@ instance Monad TracerM where
     (t1, a') <- a t0 
     let TracerM b = f a'
     b t1 
+
+instance (T s t, TensorLiteral s, [i] ~ Literal s t) => IsList (Tracer s t) where
+  type Item (Tracer s t) = ListItem (Literal s t)
+  fromList l = mkTracer $ retval $ elemsConstant shape value
+    where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+          value = fromTensorLiteral (Proxy :: Proxy s) literalPad id l :: [t]
+          
+
 
 mkTracer :: TracerM Value -> Tracer s t
 mkTracer (TracerM f) = Tracer f
@@ -100,9 +115,8 @@ instance (KnownShape s, Tensorial t, Num t) => Num (Tracer s t) where
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
   fromInteger literal = mkTracer $ do 
-    retval $ SHLO._ConstantOp (denseSplatAttr shape a) _type 
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-          shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+    retval $ splatConstant shape a
+    where shape  = fromInteger <$> shapeVal (Proxy :: Proxy s)
           a :: t = fromInteger literal
 
 instance (T s t, Fractional t) => Fractional (Tracer s t) where
@@ -113,10 +127,9 @@ instance (T s t, Fractional t) => Fractional (Tracer s t) where
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
   fromRational literal = mkTracer $ do 
-    retval $ SHLO._ConstantOp (denseSplatAttr shape a) _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-          shape      = fromIntegral <$> shapeVal (Proxy :: Proxy s)
-          a :: t     = fromRational literal
+    retval $ splatConstant shape a
+    where shape  = fromIntegral <$> shapeVal (Proxy :: Proxy s)
+          a :: t = fromRational literal
 
 
 -- TODO: Implement more trig funcs
@@ -146,14 +159,15 @@ instance (T s t, Floating t) => Floating (Tracer s t) where
     retval $ SHLO._LogOp _operand _type 
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
--- For tracing
-instance T s t => TraceableElement (Tracer s t) where
-  constructTracer i = (i + 1, Tracer $ \ a -> (a, ) <$> blockArg i, [_type])
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+-- ConvertOp
+instance ConvertOp Tracer where
+  convert :: forall s f g. (T s f, T s g) => Tracer s f -> Tracer s g
+  convert operand = mkTracer $ do 
+    _operand <- sharing operand 
+    retval $ SHLO._ConvertOp _operand _type 
+    where _type = tensorType' (Proxy :: Proxy (Tracer s g))
 
-  deconstructTracer u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
+-- ShapeOp
 newtype BroadcastMap = BroadcastMap [Word64]
 getBroadcastMap :: KnownShape s => Proxy s -> BroadcastMap
 getBroadcastMap = BroadcastMap . map fromInteger . shapeVal
@@ -205,6 +219,7 @@ unsafeReduceTracer operand body (splat -> initvalue :: Tracer '[] t) dims = mkTr
         _dims = ReduceDims (fromInteger <$> dims)
         scalar = tensorType' (Proxy :: Proxy (Tracer '[] t))
 
+
 instance Tensorial t => ShapeOp Tracer t where
   unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeBroadcast operand idxmap@(BroadcastMap . fmap fromInteger -> _map) = 
@@ -221,7 +236,7 @@ instance Tensorial t => ShapeOp Tracer t where
             in  isUnique idxmap && src == fmap (dst !!) (fromInteger <$> idxmap)
           _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
 
-  unsafeTranspose :: forall s0 s1. (KnownShape s0, KnownShape s1) => Tracer s0 t -> [Integer] -> Tracer s1 t
+  unsafeTranspose :: forall s0 s1. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeTranspose operand perm = assert correctness $ mkTracer $ do 
     _operand <- sharing operand 
     if perm == [0..fromIntegral $ length perm - 1] then -- degenerate case
@@ -238,39 +253,101 @@ instance Tensorial t => ShapeOp Tracer t where
             in  uniqueness perm && resultShape == map ((operandShape !!) . fromInteger) perm
           attr = TransposePerm (fromInteger <$> perm)
 
+  unsafeReshape :: forall s0 s1 .(T s0 t, T s1 t) => Tracer s0 t -> Tracer s1 t
+  unsafeReshape operand = assert correctness $ mkTracer $ do
+    _operand <- sharing operand
+    if operandShape == resultShape then 
+      return _operand 
+    else
+      retval $ SHLO._ReshapeOp _operand _type
+    where correctness = product (shapeVal (Proxy :: Proxy s0)) == product (shapeVal (Proxy :: Proxy s1))
+          _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+          operandShape = shapeVal (Proxy :: Proxy s0)
+          resultShape  = shapeVal (Proxy :: Proxy s1)
 
-  splat :: forall s. T s t => t -> Tracer s t
-  splat value = mkTracer $ do 
-    retval $ SHLO._ConstantOp (denseSplatAttr shape value) _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-          shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
-  
+  unsafeSlice :: forall s0 s1 .(T s0 t, T s1 t) => Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
+  unsafeSlice operand slicing = mkTracer $ do
+    _operand <- sharing operand
+    retval $ SHLO._SliceOp (mkVec starts) (mkVec limits) (mkVec strides) _operand _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+          (starts, limits, strides) = unzip3 slicing
+          mkVec :: [Integer] -> DenseIntOrFPElements (VectorType IntegerType) [Int64]
+          mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] I64) (fromIntegral <$> vec)
+
+  unsafePad :: forall s0 s1 .(T s0 t, T s1 t) => t -> Tracer s0 t -> [(Integer, Integer, Integer)] -> Tracer s1 t
+  unsafePad padval operand padding = mkTracer $ do
+    _operand <- sharing operand 
+    _value   <- sharing value
+    retval $ SHLO._PadOp (mkVec lower) (mkVec higher) (mkVec interior) _operand _value _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+          (lower, higher, interior) = unzip3 padding
+          mkVec :: [Integer] -> DenseIntOrFPElements (VectorType IntegerType) [Int64]
+          mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] I64) (fromIntegral <$> vec)
+          value :: Tracer '[] t = splat padval
+
+  unsafeReverse :: forall s0 .T s0 t => Tracer s0 t -> [Integer] -> Tracer s0 t
+  unsafeReverse operand dims = mkTracer $ do
+    _operand <- sharing operand 
+    retval $ SHLO._ReverseOp dims' _operand _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s0 t))
+          dims' = DenseIntOrFPElements (VectorType [fromIntegral $ length dims] SI64) (fromInteger <$> dims :: [Int64])
+
+  splat :: forall s .T s t => t -> Tracer s t
+  splat value = mkTracer $ 
+    retval $ splatConstant shape value 
+    where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+
+  unsafeScatter :: forall s0 s1 s2 .(T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 Int64 -> Tracer s2 t -> [Integer] -> [Integer] -> [Integer] -> Integer -> Tracer s0 t
+  unsafeScatter input sctIdx upd uwd iwd sdtod ivd = mkTracer $ do 
+    _input <- sharing input
+    _sctIdx <- sharing sctIdx
+    _upd <- sharing upd
+    retval $ head <$> SHLO._ScatterOp attr (Just $ BoolAttr False) (Just $ BoolAttr False) [_input, _sctIdx, _upd] (do 
+      blk <- blockGet [scalarType, scalarType]
+      blockDef blk $ do 
+        _1 <- blockArg 1
+        SHLO._ReturnOp [_1]) [_type]
+    where _type      = tensorType' (Proxy :: Proxy (Tracer s0 t))
+          scalarType = tensorType' (Proxy :: Proxy (Tracer '[] t)) 
+          attr       = ScatterDimensionNumbersAttr {
+                         updateWindow = fromInteger <$> uwd,
+                         insertWindow = fromInteger <$> iwd,
+                         scatterDimsToOperandDims = fromInteger <$> sdtod,
+                         indexVectorDim = fromInteger ivd
+                       }
+
+  unsafeGather :: forall s0 s1 s2 .(T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> [Integer] -> Tracer s2 t
+  unsafeGather operand starts offsetAxes collapsedAxes startAxisMap idxVectorAxis sliceSizes = mkTracer $ do 
+    _operand <- sharing operand
+    _starts  <- sharing starts
+    retval $ SHLO._GatherOp dimensionNumbers sliceSizesAttr (Just $ BoolAttr False) _operand _starts _type
+    where dimensionNumbers = GatherDimensionNumbersAttr { offsetDims = fromInteger <$> offsetAxes, 
+                                                          collapsedSliceDims = fromInteger <$> collapsedAxes,
+                                                          startIdxMap = fromInteger <$> startAxisMap,
+                                                          idxVecDim = fromInteger idxVectorAxis
+                                                        }
+          sliceSizesAttr = DenseIntOrFPElements (RankedTensorType [fromIntegral $ length sliceSizes] I64 NullAttr) (fromInteger <$> sliceSizes :: [Int64])
+          _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+
+  unsafeConcat :: forall s0 s1 s2. (KnownShape s0, KnownShape s1, KnownShape s2) => Integer -> Tracer s0 t -> Tracer s1 t -> Tracer s2 t
+  unsafeConcat dims lhs rhs = assert (lhsRank == rhsRank && lhsOtherAxes == rhsOtherAxes) $ mkTracer $ do 
+    _lhs <- sharing lhs 
+    _rhs <- sharing rhs
+    retval $ SHLO._ConcatenateOp (IntegerAttr I64 $ fromInteger dims) [_lhs, _rhs] _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+          lhsRank = shapeRank (Proxy :: Proxy s0)
+          rhsRank = shapeRank (Proxy :: Proxy s1)
+          remove n a = take n a ++ drop (n + 1) a
+          lhsOtherAxes = remove (fromInteger dims) $ shapeVal (Proxy :: Proxy s0)
+          rhsOtherAxes = remove (fromInteger dims) $ shapeVal (Proxy :: Proxy s1)
+
 
 instance (Num t, Tensorial t) => MathOp Tracer t where
   -- TODO: Implement a better linspace
   linspace :: forall n. (KnownNat n, Fractional t, Enum t) => (t, t) -> Tracer '[n] t
-  linspace (a, b) = mkTracer $ 
-    retval $ SHLO._ConstantOp attr $ toAnyType _type 
-    where _type = tensorType (Proxy :: Proxy (Tracer '[n] t))
-          attr  = DenseElementsRawBuffer _type $ unsafePerformIO buf
-          nelem = fromInteger $ natVal (Proxy :: Proxy n)
-          buf = do 
-            buffer :: MutablePrimArray RealWorld t <- newPrimArray nelem 
-            populate buffer ((0, a), (nelem - 1, b))
-            undefined
-          populate :: MutablePrimArray RealWorld t -> ((Int, t), (Int, t)) -> IO ()
-          populate array ((offset, bottom), (len, top)) 
-            | len <= 0  = return ()
-            | even len  = do 
-              writePrimArray array (offset + len - 1) top
-              populate array ((offset, bottom), (len - 1, top - stepsize))
-            | otherwise = do 
-              let center = len `div` 2
-                  value  = (a + b) / 2
-              writePrimArray array center value
-              populate array ((offset, bottom), (center, value - stepsize))
-              populate array ((center + 1, value + stepsize), (center, top))
-          stepsize = (b - a) / (fromIntegral nelem - 1)
+  linspace (low, high) = splat step * unsafeIota 0
+    where step = (high - low) / (n - 1)
+          n    = fromInteger $ natVal (Proxy :: Proxy n)
 
   unsafeReduceAdd operand = unsafeReduceTracer operand SHLO._AddOp 0
   unsafeReduceMul operand = unsafeReduceTracer operand SHLO._MulOp 1
@@ -282,77 +359,101 @@ instance (Num t, Tensorial t) => MathOp Tracer t where
     retval $ SHLO._DotGeneralOp attr Nothing _lhs _rhs _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
 
+  -- TODO: Add error detection
+  unsafeConvolution :: forall s0 s1 s2. (T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 t -> Tracer s2 t
+  unsafeConvolution lhs rhs = mkTracer $ do 
+    _lhs <- sharing lhs 
+    _rhs <- sharing rhs
+    retval $ SHLO._ConvolutionOp nothing nothing nothing nothing 
+                                 (Nothing :: Maybe (DenseIntOrFPElements (VectorType IntegerType) Bool)) 
+                                 attr (IntegerAttr I64 1) (IntegerAttr I64 1) Nothing _lhs _rhs _type
+    where attr = ConvDimensionNumbersAttr {
+            inputBatchDim = 0,
+            inputFeatDim  = fromInteger rank0 - 1,
+            inputSpatDims = [1..fromInteger rank0 - 2],
+            
+            kernelInputFeatDim  = 0,
+            kernelOutputFeatDim = fromInteger rank1 - 1,
+            kernelSpatDims      = [1..fromInteger rank1 - 2],
+            
+            outputBatchDim = 0,
+            outputFeatDim  = fromInteger rank2 - 1,
+            outputSpatDims = [1..fromInteger rank2 - 2]
+          }
+          _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+          nothing :: Maybe (DenseIntOrFPElements (VectorType IntegerType) [Int64]) = Nothing
+          rank0 = shapeRank (Proxy :: Proxy s0)
+          rank1 = shapeRank (Proxy :: Proxy s1)
+          rank2 = shapeRank (Proxy :: Proxy s2)
+
+  unsafeIota :: forall s0. KnownShape s0 => Integer -> Tracer s0 t
+  unsafeIota dims = assert (dims < rank) $ mkTracer $ do 
+    retval $ SHLO._IotaOp (IntegerAttr I64 (fromInteger dims)) _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s0 t))
+          rank  = shapeRank (Proxy :: Proxy s0)
+
+
+
 instance Tensorial t => SelectOp Tracer t where
-  branch :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer '[] Pred -> Tracer s t
+  branch :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer '[] Bool -> Tracer s t
   branch false true cond = mkTracer $ do 
     _false <- sharing false 
     _true  <- sharing true 
     _cond  <- sharing cond
---    _cond  <- (retval . (`SHLO._ConvertOp` toAnyType (RankedTensorType [] (I 1) NullAttr))) =<< sharing cond
     retval $ SHLO._SelectOp _cond _true _false _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
-  select :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred -> Tracer s t
+  select :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Bool -> Tracer s t
   select false true cond = mkTracer $ do 
     _false <- sharing false 
     _true  <- sharing true 
     _cond  <- sharing cond
---    _cond  <- (retval . (`SHLO._ConvertOp` toAnyType (RankedTensorType shape (I 1) NullAttr))) =<< sharing cond
     retval $ SHLO._SelectOp _cond _true _false _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-          -- shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
 
-class Tensorial t => EqualOpTracer t where
-  comparisonType :: Proxy t -> ComparisonTypeAttr
-instance EqualOpTracer Float where
-  comparisonType _ = ComparisonTypeFloat
-instance EqualOpTracer Word8 where
-  comparisonType _ = ComparisonTypeUnsigned
-instance EqualOpTracer Pred where
-  comparisonType _ = ComparisonTypeUnsigned
 
-instance EqualOpTracer t => EqualOp Tracer t where
-  isEQ :: forall s. (KnownShape s, EqualOpTracer t) => Tracer s t -> Tracer s t -> Tracer s Pred
+instance Tensorial t => EqualOp Tracer t where
+  isEQ :: forall s. (KnownShape s) => Tracer s t -> Tracer s t -> Tracer s Bool
   isEQ lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionEQ (Just ct) _lhs _rhs tt
     where ct = comparisonType (Proxy :: Proxy t)
-          tt = tensorType' (Proxy :: Proxy (Tracer s Pred))
-  isNE :: forall s. (KnownShape s, EqualOpTracer t) => Tracer s t -> Tracer s t -> Tracer s Pred
+          tt = tensorType' (Proxy :: Proxy (Tracer s Bool))
+  isNE :: forall s. (KnownShape s) => Tracer s t -> Tracer s t -> Tracer s Bool
   isNE lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionNE (Just ct) _lhs _rhs tt
     where ct = comparisonType (Proxy :: Proxy t)
-          tt = tensorType' (Proxy :: Proxy (Tracer s Pred))
+          tt = tensorType' (Proxy :: Proxy (Tracer s Bool))
 
-instance EqualOpTracer t => OrderOp Tracer t where
-  isGT :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred
+instance Tensorial t => OrderOp Tracer t where
+  isGT :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Bool
   isGT lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionGT (Just ctype) _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s Pred))
+    where _type = tensorType' (Proxy :: Proxy (Tracer s Bool))
           ctype = comparisonType (Proxy :: Proxy t)
-  isGE :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred
+  isGE :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Bool
   isGE lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionGE (Just ctype) _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s Pred))
+    where _type = tensorType' (Proxy :: Proxy (Tracer s Bool))
           ctype = comparisonType (Proxy :: Proxy t)
-  isLT :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred
+  isLT :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Bool
   isLT lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionLT (Just ctype) _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s Pred))
+    where _type = tensorType' (Proxy :: Proxy (Tracer s Bool))
           ctype = comparisonType (Proxy :: Proxy t)
-  isLE :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Pred
+  isLE :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Bool
   isLE lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionLE (Just ctype) _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s Pred))
+    where _type = tensorType' (Proxy :: Proxy (Tracer s Bool))
           ctype = comparisonType (Proxy :: Proxy t)

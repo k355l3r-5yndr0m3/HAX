@@ -29,7 +29,7 @@ import Prelude hiding (pred)
 
 import Foreign
 
-newtype BufferType = BufferType Int32
+newtype BufferType = BufferType Int32 deriving (Eq)
 
 foreign import capi unsafe "pjrt_c_api.h value PJRT_Buffer_Type_INVALID"
   c__enum__PJRT_Buffer_Type_INVALID :: Int32
@@ -145,3 +145,29 @@ foreign import capi unsafe "pjrt_c_api.h value PJRT_Buffer_Type_U4"
   c__enum__PJRT_Buffer_Type_U4 :: Int32
 u4 :: BufferType 
 u4 = BufferType c__enum__PJRT_Buffer_Type_U4
+
+instance Show BufferType where
+  show dtype 
+    | dtype == pred       = "Bool"
+    | dtype == s8         = "Int8" 
+    | dtype == s16        = "Int16"
+    | dtype == s32        = "Int32"
+    | dtype == s64        = "Int64"
+    | dtype == u8         = "Word8"
+    | dtype == u16        = "Word16"
+    | dtype == u32        = "Word32"
+    | dtype == u64        = "Word64"
+    | dtype == f16        = "16 bit floating point (TO BE SUPPORTED)"
+    | dtype == f32        = "Float"
+    | dtype == f64        = "Double"
+    | dtype == bf16       = "bf16 TO BE SUPPORTED"
+    | dtype == c64        = "complex 64 bit TO BE SUPPORTED"
+    | dtype == c128       = "complex 128 bit TO BE SUPPORTED"
+    | dtype == f8e5m2     = "what ever this is"
+    | dtype == f8e4m3fn   = "TO BE SUPPORTED"
+    | dtype == enum       = "TO BE SUPPORTED" 
+    | dtype == f8e5m2fnuz = "TO BE SUPPORTED"
+    | dtype == f8e4m3fnuz = "TO BE SUPPORTED"
+    | dtype == s4         = "TO BE SUPPORTED"
+    | dtype == u4         = "TO BE SUPPORTED"
+    | otherwise           = error "Unknown tensor element type"

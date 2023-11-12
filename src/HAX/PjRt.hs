@@ -12,10 +12,8 @@ import qualified HAX.PjRt.Buffer           as C
 
 import Control.Monad (forM)
 
-import Data.Unique
 import Data.Primitive
 
-import Debug.Trace
 
 import Foreign
 
@@ -80,13 +78,21 @@ clientBufferFromHostBufferGC (Client c) hostBuffer bufferType shapeInfo (Device 
 -- Buffer
 bufferToHostBuffer :: Buffer -> IO ByteArray
 bufferToHostBuffer (Buffer b) = 
-  withForeignPtr b $ \ b' -> 
-    C.bufferToHostBuffer api b'
+  withForeignPtr b (C.bufferToHostBuffer api)
 
-bufferDimensions :: Buffer -> IO [Int64]
-bufferDimensions (Buffer b) =
+bufferToHostBuffer' :: Buffer -> IO (Int, Ptr a)
+bufferToHostBuffer' (Buffer b) = 
+  withForeignPtr b (C.bufferToHostBuffer' api)
+
+bufferDimensions :: Buffer -> [Int64]
+bufferDimensions (Buffer b) = unsafePerformIO $
   withForeignPtr b $ \ b' ->
     C.bufferDimensions api b'
+
+bufferElementType :: Buffer -> BufferType
+bufferElementType (Buffer b) = unsafePerformIO $
+  withForeignPtr b $ \ b' ->
+    C.bufferElementType api b'
 
 -- Event
 eventAwait :: Event -> IO ()

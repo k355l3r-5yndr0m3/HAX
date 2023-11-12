@@ -1,9 +1,6 @@
-{-# LANGUAGE TypeFamilyDependencies #-}
-{-# LANGUAGE ViewPatterns #-}
 module HAX.AD.Gradient where
 
 import Data.Dynamic
-import Data.List
 import Data.Proxy
 import Type.Reflection
 
@@ -18,13 +15,11 @@ newtype Gradient = Gradient [(CIntPtr, Dynamic)]
 zero :: Gradient
 zero = Gradient []
 
+nograd :: a -> Gradient 
+nograd = const zero
+
 independent :: Typeable t => CIntPtr -> t -> Gradient
 independent idx val = Gradient [(idx, toDyn val)]
-
-reifyGrad :: (Typeable t, Num t) => CIntPtr -> Gradient -> (t, Gradient)
-reifyGrad idx (Gradient gradient) = (grad, other)
-  where (fmap snd -> g, Gradient -> other) = partition ((== idx) . fst) gradient
-        grad = sum $ fmap fromDyn' g
 
 type Cotangent t = (Typeable t, Num t)
 
