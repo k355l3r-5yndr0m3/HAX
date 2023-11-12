@@ -165,6 +165,17 @@ instance (T s t, forall s'. KnownShape s' => Floating (r s' t), ShapeOp r t, Tra
     where result :: forall s'. KnownShape s' => Proxy s' -> r s t
           result _ = coerce $! (log $ coerce operand :: r s' t)
 
+instance (ConvertOp r, forall t. Transformable r t) => ConvertOp (Target r) where
+  convert :: forall s f g. (T s f, T s g) => Target r s f -> Target r s g
+  convert (Target dims operand) = Target dims $ reifyShape (dims ++ shapeVal (Proxy :: Proxy s)) $ \shape ->
+    let operand' = same (scoerce operand) shape
+        result'  = same (convert operand') shape
+    in  scoerce result'
+    where same :: KnownShape s' => r s' t -> Proxy s' -> r s' t
+          same i _ = i
+          scoerce :: Coercible (r a b) (r c b) => r a b -> r c b
+          scoerce = coerce 
+
 instance (Tensorial t, ShapeOp r t, Transformable r t, MathOp r Int64, Transformable r Int64) => ShapeOp (Target r) t where
   -- NOTE: haskell cannot determine the write method to call so this is a fix
   unsafeBroadcast :: forall s0 s1. (T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
@@ -380,7 +391,7 @@ instance (MathOp r t, ShapeOp r t, Transformable r t, Transformable r Int64, Mat
                 t2 :: r s2' t = unsafeDotGeneral t0 t1 attr'
             in  coerce $! t2
 
-  unsafeReduceAdd :: forall s0 s1. (T s0 t, T s1 t, Num t) => Target r s0 t -> [Integer] -> Target r s1 t
+  unsafeReduceAdd :: forall s0 s1. (T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeReduceAdd (Target dims operand) axies = Target dims $ 
     reifyShape s0 $ \ s0' -> reifyShape s1 $ \ s1' -> 
       result s0' s1'
@@ -393,7 +404,7 @@ instance (MathOp r t, ShapeOp r t, Transformable r t, Transformable r Int64, Mat
                 t1 :: r s1' t = unsafeReduceAdd t0 axies'
             in  coerce $! t1
 
-  unsafeReduceMul :: forall s0 s1. (T s0 t, T s1 t, Num t) => Target r s0 t -> [Integer] -> Target r s1 t
+  unsafeReduceMul :: forall s0 s1. (T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeReduceMul (Target dims operand) axies = Target dims $ 
     reifyShape s0 $ \ s0' -> reifyShape s1 $ \ s1' -> 
       result s0' s1'

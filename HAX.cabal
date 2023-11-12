@@ -112,12 +112,14 @@ library
     build-depends:    base ^>=4.18.0.0,
                       mlir-hs,
                       stablehlo-hs,
-                      primitive,
+                      primitive, 
                       containers,
                       reflection,
-                      random,
+                      random, 
                       JuicyPixels,
                       vector,
+                      cpu
+    -- Maybe: remove primitive, random
 
 
     -- Directories containing source files.
@@ -191,4 +193,13 @@ test-suite HAX-IO-test
                       HAX,
                       JuicyPixels,
 
+test-suite HAX-MNIST-test
+    import:           warnings 
+    default-language: GHC2021
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test/MNIST
+    main-is:          Main.hs 
+    build-depends:    base,
+                      HAX,
 
+  

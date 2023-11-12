@@ -3,7 +3,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 module HAX.Tensor.Tensor where
-import Prelude hiding (lookup)
+import Prelude hiding (lookup, pred)
 
 import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
@@ -11,11 +11,11 @@ import HAX.Tensor.Tensorial
 import HAX.Jit hiding (jit)
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
+import HAX.PjRt.BufferType
 import HAX.Utils
 
 import Data.Proxy
 import Data.Primitive hiding (newArray)
-import Data.Int
 
 import Foreign
 
@@ -23,9 +23,54 @@ import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.IsList
 import GHC.TypeLits
 
-newtype Tensor (s :: Shape) a = Tensor { getUnderlyingBuffer :: Buffer }
-debugTensorShape :: Tensor s t -> IO [Int64]
-debugTensorShape = bufferDimensions . getUnderlyingBuffer
+newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
+newtype AnyTsr = AnyTsr { getAnyTsrBuffer :: Buffer }
+
+toTensor :: forall s t. T s t => AnyTsr -> Maybe (Tensor s t)
+toTensor (getAnyTsrBuffer -> buffer) = 
+  if (shape == bufferDimensions buffer) && (_type == bufferElementType buffer) then 
+    Just (Tensor buffer)
+  else
+    Nothing
+  where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+        _type = pjrtBufferType (Proxy :: Proxy t)
+
+toTensor' :: forall s t. T s t => AnyTsr -> Tensor s t
+toTensor' (getAnyTsrBuffer -> buffer) = 
+  if (shape == bufferDimensions buffer) && (_type == bufferElementType buffer) then 
+    Tensor buffer
+  else
+    error $ "Wrong shape and/or dtype (Actural: " ++ show shape ++ ")"
+  where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
+        _type = pjrtBufferType (Proxy :: Proxy t)
+
+
+withAnyTsr :: AnyTsr -> (forall s t. T s t => Tensor s t -> a) -> a
+withAnyTsr (AnyTsr buffer) func = 
+  reifyShape shape $ \shape' -> 
+    let elemtype = bufferElementType buffer 
+    in  if elemtype == f32 then 
+          func (same shape' (Proxy :: Proxy Float))
+        else if elemtype == u8 then 
+          func (same shape' (Proxy :: Proxy Word8))
+        else if elemtype == pred then 
+          func (same shape' (Proxy :: Proxy Bool))
+        else if elemtype == s64 then
+          func (same shape' (Proxy :: Proxy Int64))
+        else 
+          error "Unsupported tensor type"
+  where shape = fromIntegral <$> bufferDimensions buffer
+        same :: T s t => Proxy s -> Proxy t -> Tensor s t
+        same _ _ = Tensor buffer
+
+anyTsrShape :: AnyTsr -> [Int]
+anyTsrShape = fmap fromIntegral . bufferDimensions . getAnyTsrBuffer
+
+anyTsrType  :: AnyTsr -> BufferType
+anyTsrType = bufferElementType . getAnyTsrBuffer
+
+debugTensorShape :: Tensor s t -> [Int]
+debugTensorShape = fmap fromIntegral . bufferDimensions . getTensorBuffer
 
 getScalar :: Tensorial t => Tensor '[] t -> t
 getScalar (Tensor b) = unsafePerformIO (toHaskell . (`indexByteArray` 0) <$> bufferToHostBuffer b)
@@ -53,7 +98,6 @@ instance (T s a, Show (StorageType a), Prim (StorageType a)) => Show (Tensor s a
                   (s', offs') = formater offs ies buf (c:s)
               in  formater offs' ((idx - 1, ext):ies) buf s'
 
-
 instance (T s t, TensorLiteral s, [i] ~ Literal s t) => IsList (Tensor s t) where
   type Item (Tensor s t) = ListItem (Literal s t)
 
@@ -62,7 +106,6 @@ instance (T s t, TensorLiteral s, [i] ~ Literal s t) => IsList (Tensor s t) wher
             buffer <- mallocArray $ length a
             pokeArray buffer a
             tensorFromHostBufferGC defaultDevice buffer 
-
 
 tensorToPrimArray :: Tensor s t -> PrimArray (StorageType t)
 tensorToPrimArray (Tensor buffer) = unsafePerformIO $ conv <$> bufferToHostBuffer buffer
@@ -142,9 +185,20 @@ instance (T s t, Floating t) => Floating (Tensor s t) where
   exp = jit exp
   log = jit log
 
+instance ConvertOp Tensor where
+  convert = jit convert
+
 instance Tensorial t => ShapeOp Tensor t where
   unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand
   unsafeTranspose operand perm = jit (`unsafeTranspose` perm) operand
+  unsafeReshape = jit unsafeReshape
+  unsafeSlice operand slicing = jit (`unsafeSlice` slicing) operand
+  unsafeReverse operand dims = jit (`unsafeReverse` dims) operand
+  unsafeScatter input indices update uwd iwd sdtod ivd = jit (\inp ind upd -> unsafeScatter inp ind upd uwd iwd sdtod ivd) input indices update
+  unsafeGather operand start offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = jit (\op st -> unsafeGather op st offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes) operand start
+  unsafeConcat d = jit (unsafeConcat d)
+
+  unsafePad t v p = jit (\v' -> unsafePad t v' p) v
 
   splat a = unsafePerformIO $ tensorSplat defaultDevice a
 
@@ -158,8 +212,15 @@ instance (Num t, Tensorial t) => MathOp Tensor t where
   unsafeReduceMul operand axies = jit (`unsafeReduceMul` axies) operand
 
   unsafeIota i = jit (unsafeIota i)
+  unsafeConvolution = jit unsafeConvolution
+
+  unsafeMultiIota ds d = jit $ unsafeMultiIota ds d
 
 instance Tensorial t => SelectOp Tensor t where
   branch = jit branch
   select = jit select
 
+
+instance Tensorial t => EqualOp Tensor t where
+  isEQ = jit isEQ
+  isNE = jit isNE

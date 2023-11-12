@@ -26,6 +26,14 @@ import Stablehlo.Dialect.Stablehlo.Attributes
 import GHC.IsList
 
 newtype Tracer (s :: Shape) t = Tracer (IntMap Value -> BlockM (IntMap Value, Value))
+-- For tracing
+-- TODO: Put somewhere else
+instance T s t => TraceableElement (Tracer s t) where
+  constructTracer i = (i + 1, Tracer $ \ a -> (a, ) <$> blockArg i, [_type])
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
+  deconstructTracer u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 newtype TracerM a = TracerM (IntMap Value -> BlockM (IntMap Value, a))
 instance Functor TracerM where
@@ -151,15 +159,15 @@ instance (T s t, Floating t) => Floating (Tracer s t) where
     retval $ SHLO._LogOp _operand _type 
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
--- For tracing
--- TODO: Put somewhere else
-instance T s t => TraceableElement (Tracer s t) where
-  constructTracer i = (i + 1, Tracer $ \ a -> (a, ) <$> blockArg i, [_type])
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+-- ConvertOp
+instance ConvertOp Tracer where
+  convert :: forall s f g. (T s f, T s g) => Tracer s f -> Tracer s g
+  convert operand = mkTracer $ do 
+    _operand <- sharing operand 
+    retval $ SHLO._ConvertOp _operand _type 
+    where _type = tensorType' (Proxy :: Proxy (Tracer s g))
 
-  deconstructTracer u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
+-- ShapeOp
 newtype BroadcastMap = BroadcastMap [Word64]
 getBroadcastMap :: KnownShape s => Proxy s -> BroadcastMap
 getBroadcastMap = BroadcastMap . map fromInteger . shapeVal
@@ -358,7 +366,7 @@ instance (Num t, Tensorial t) => MathOp Tracer t where
     _rhs <- sharing rhs
     retval $ SHLO._ConvolutionOp nothing nothing nothing nothing 
                                  (Nothing :: Maybe (DenseIntOrFPElements (VectorType IntegerType) Bool)) 
-                                 attr (IntegerAttr SI64 1) (IntegerAttr SI64 1) Nothing _lhs _rhs _type
+                                 attr (IntegerAttr I64 1) (IntegerAttr I64 1) Nothing _lhs _rhs _type
     where attr = ConvDimensionNumbersAttr {
             inputBatchDim = 0,
             inputFeatDim  = fromInteger rank0 - 1,
@@ -392,7 +400,6 @@ instance Tensorial t => SelectOp Tracer t where
     _false <- sharing false 
     _true  <- sharing true 
     _cond  <- sharing cond
---    _cond  <- (retval . (`SHLO._ConvertOp` toAnyType (RankedTensorType [] (I 1) NullAttr))) =<< sharing cond
     retval $ SHLO._SelectOp _cond _true _false _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
@@ -401,29 +408,19 @@ instance Tensorial t => SelectOp Tracer t where
     _false <- sharing false 
     _true  <- sharing true 
     _cond  <- sharing cond
---    _cond  <- (retval . (`SHLO._ConvertOp` toAnyType (RankedTensorType shape (I 1) NullAttr))) =<< sharing cond
     retval $ SHLO._SelectOp _cond _true _false _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-          -- shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
 
-class Tensorial t => EqualOpTracer t where
-  comparisonType :: Proxy t -> ComparisonTypeAttr
-instance EqualOpTracer Float where
-  comparisonType _ = ComparisonTypeFloat
-instance EqualOpTracer Word8 where
-  comparisonType _ = ComparisonTypeUnsigned
-instance EqualOpTracer Bool where
-  comparisonType _ = ComparisonTypeUnsigned
 
-instance EqualOpTracer t => EqualOp Tracer t where
-  isEQ :: forall s. (KnownShape s, EqualOpTracer t) => Tracer s t -> Tracer s t -> Tracer s Bool
+instance Tensorial t => EqualOp Tracer t where
+  isEQ :: forall s. (KnownShape s) => Tracer s t -> Tracer s t -> Tracer s Bool
   isEQ lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionEQ (Just ct) _lhs _rhs tt
     where ct = comparisonType (Proxy :: Proxy t)
           tt = tensorType' (Proxy :: Proxy (Tracer s Bool))
-  isNE :: forall s. (KnownShape s, EqualOpTracer t) => Tracer s t -> Tracer s t -> Tracer s Bool
+  isNE :: forall s. (KnownShape s) => Tracer s t -> Tracer s t -> Tracer s Bool
   isNE lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
@@ -431,7 +428,7 @@ instance EqualOpTracer t => EqualOp Tracer t where
     where ct = comparisonType (Proxy :: Proxy t)
           tt = tensorType' (Proxy :: Proxy (Tracer s Bool))
 
-instance EqualOpTracer t => OrderOp Tracer t where
+instance Tensorial t => OrderOp Tracer t where
   isGT :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Bool
   isGT lhs rhs = mkTracer $ do
     _lhs <- sharing lhs

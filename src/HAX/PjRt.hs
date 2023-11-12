@@ -84,10 +84,15 @@ bufferToHostBuffer' :: Buffer -> IO (Int, Ptr a)
 bufferToHostBuffer' (Buffer b) = 
   withForeignPtr b (C.bufferToHostBuffer' api)
 
-bufferDimensions :: Buffer -> IO [Int64]
-bufferDimensions (Buffer b) =
+bufferDimensions :: Buffer -> [Int64]
+bufferDimensions (Buffer b) = unsafePerformIO $
   withForeignPtr b $ \ b' ->
     C.bufferDimensions api b'
+
+bufferElementType :: Buffer -> BufferType
+bufferElementType (Buffer b) = unsafePerformIO $
+  withForeignPtr b $ \ b' ->
+    C.bufferElementType api b'
 
 -- Event
 eventAwait :: Event -> IO ()

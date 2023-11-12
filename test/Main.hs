@@ -120,8 +120,6 @@ test26 x = select (x + 2) x (x `isGT` 0)
 
 -- Recursion test
 -- TODO: Implement
-
-
 test27 :: Target Tracer [5, 5] Float -> Target Tracer '[5] Float -> Target Tracer [5, 5] Float
 test27 x y = unsafeScatter x indices y [] [0, 1] [0, 1] 1
   where indices :: Target Tracer [5, 2] Int64 = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]
@@ -132,6 +130,45 @@ test28 = vmap test27
 
 test29 :: Target Tracer [3, 5, 5] Float -> Target Tracer '[5] Float -> Target Tracer [3, 5, 5] Float
 test29 x y = vmap (`test27` y) x
+
+-- TODO: Implement more type inference
+test30 :: Target Tracer [256, 256, 3] Float -> Target Tracer [248, 248, 3] Float
+test30 image = convolution' image kernel
+  where kernel  :: Target Tracer [3, 9, 9, 3] Float = 
+          broadcast kernel' (Proxy :: Proxy [1, 2]) / 3
+        kernel' :: Target Tracer [9, 9] Float = 
+          [[0.0000, 0.0000, 0.0000, 0.0001, 0.0001, 0.0001, 0.0000, 0.0000, 0.0000], 
+           [0.0000, 0.0000, 0.0004, 0.0014, 0.0023, 0.0014, 0.0004, 0.0000, 0.0000],
+           [0.0000, 0.0004, 0.0037, 0.0146, 0.0232, 0.0146, 0.0037, 0.0004, 0.0000],
+           [0.0001, 0.0014, 0.0146, 0.0584, 0.0926, 0.0584, 0.0146, 0.0014, 0.0001],
+           [0.0001, 0.0023, 0.0232, 0.0926, 0.1466, 0.0926, 0.0232, 0.0023, 0.0001],
+           [0.0001, 0.0014, 0.0146, 0.0584, 0.0926, 0.0584, 0.0146, 0.0014, 0.0001],
+           [0.0000, 0.0004, 0.0037, 0.0146, 0.0232, 0.0146, 0.0037, 0.0004, 0.0000],
+           [0.0000, 0.0000, 0.0004, 0.0014, 0.0023, 0.0014, 0.0004, 0.0000, 0.0000],
+           [0.0000, 0.0000, 0.0000, 0.0001, 0.0001, 0.0001, 0.0000, 0.0000, 0.0000]]
+
+test31 :: Target Tracer [256, 256, 3] Float -> Target Tracer [2, 3, 9, 9, 3] Float -> Target Tracer [2, 248, 248, 3] Float
+test31 image = vmap (convolution' image)
+
+gaussianKernel :: Tensor [9, 9] Float 
+gaussianKernel = [[0.0000, 0.0000, 0.0000, 0.0001, 0.0001, 0.0001, 0.0000, 0.0000, 0.0000], 
+                  [0.0000, 0.0000, 0.0004, 0.0014, 0.0023, 0.0014, 0.0004, 0.0000, 0.0000],
+                  [0.0000, 0.0004, 0.0037, 0.0146, 0.0232, 0.0146, 0.0037, 0.0004, 0.0000],
+                  [0.0001, 0.0014, 0.0146, 0.0584, 0.0926, 0.0584, 0.0146, 0.0014, 0.0001],
+                  [0.0001, 0.0023, 0.0232, 0.0926, 0.1466, 0.0926, 0.0232, 0.0023, 0.0001],
+                  [0.0001, 0.0014, 0.0146, 0.0584, 0.0926, 0.0584, 0.0146, 0.0014, 0.0001],
+                  [0.0000, 0.0004, 0.0037, 0.0146, 0.0232, 0.0146, 0.0037, 0.0004, 0.0000],
+                  [0.0000, 0.0000, 0.0004, 0.0014, 0.0023, 0.0014, 0.0004, 0.0000, 0.0000],
+                  [0.0000, 0.0000, 0.0000, 0.0001, 0.0001, 0.0001, 0.0000, 0.0000, 0.0000]]
+
+
+boxBlurKernel :: Tensor [9, 9] Float
+boxBlurKernel = 1 / 81
+
+test32input :: Tensor [2, 3, 9, 9, 3] Float
+test32input = unsafeConcat 0 g b
+  where g :: Tensor [1, 3, 9, 9, 3] Float = broadcast gaussianKernel (Proxy :: Proxy [2, 3])
+        b :: Tensor [1, 3, 9, 9, 3] Float = broadcast boxBlurKernel  (Proxy :: Proxy [2, 3])
 
 main :: IO ()
 main = do 
@@ -217,9 +254,12 @@ main = do
   print (jit test28 0 (1 + unsafeIota 0))
   print (jit test29 0 (1 + unsafeIota 0))
   
-
-  either putStrLn (\(tensorFromImage . convertRGB8 -> image :: Tensor [256, 256, 3] Word8) -> do
-    undefined) =<< readImage "test/data/image.jpg"
+  either putStrLn (\(convert . tensorFromImage . convertRGB8 -> image :: Tensor [256, 256, 3] Float) -> do
+    let image' = jit (test30 . (/256.0)) image
+        t2     = jit test31 (image / 256) test32input / 3
+    writePng "test/data/image-conv.png" (convertRGB8 $ ImageRGBF $ imageFromTensor image')
+    writePng "test/data/image-conv0.png" (convertRGB8 $ ImageRGBF $ imageFromTensor (t2 @% 0))
+    writePng "test/data/image-conv1.png" (convertRGB8 $ ImageRGBF $ imageFromTensor (t2 @% 1))) =<< readImage "test/data/image.jpg"
 
 
 

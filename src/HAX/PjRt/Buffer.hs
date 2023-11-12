@@ -7,6 +7,7 @@ module HAX.PjRt.Buffer (
 , bufferToHostBuffer
 , bufferToHostBuffer'
 , bufferDimensions
+, bufferElementType
 ) where
 
 import HAX.PjRt.Plugin
@@ -16,6 +17,7 @@ import Foreign.C
 
 import GHC.Exts
 import Data.Primitive.ByteArray
+import HAX.PjRt.BufferType (BufferType (BufferType))
 
 -- foreign import ccall unsafe "buffer_destroy"
 --   bufferDestroy :: Ptr Api -> Ptr Buffer -> IO ()
@@ -51,3 +53,8 @@ bufferDimensions api buffer = do
     dims <- c__bufferDimensions api buffer size 
     _size <- peek size 
     peekArray (fromIntegral _size) dims
+
+foreign import ccall unsafe "buffer_element_type"
+  c__bufferElementType :: Ptr Api -> Ptr Buffer -> IO Int32
+bufferElementType :: Ptr Api -> Ptr Buffer -> IO BufferType
+bufferElementType api buffer = BufferType <$> c__bufferElementType api buffer

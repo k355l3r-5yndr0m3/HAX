@@ -88,6 +88,11 @@ instance Floating (r s t) => Floating (Reverse r s t) where
   log (Reverse (f, f')) = 
     Reverse (log f, \i -> f' (i / f))
 
+
+-- ConvertOp 
+instance ConvertOp r => ConvertOp (Reverse r) where
+  convert (Reverse (f, f')) = Reverse (convert f, f' . convert)
+
 -- ShapeOp
 differentiableUnsafeBroadcast :: forall r t s0 s1. (ShapeOp r t, MathOp r t, Num t, KnownShape s0, KnownShape s1) => Reverse r s0 t -> [Integer] -> Reverse r s1 t
 differentiableUnsafeBroadcast (Reverse (f, f')) _map = 

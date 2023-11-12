@@ -40,3 +40,7 @@ const int64_t *buffer_dimensions(PJRT_Api *api, PJRT_Buffer *buffer, size_t *ran
     *rank_out = result.num_dims;
     return result.dims;
 }
+
+const int32_t buffer_element_type(PJRT_Api *api, PJRT_Buffer *buffer) {
+    return API_CALL_CATCHER(Buffer_ElementType, fatal_error, .buffer = buffer).type;
+}

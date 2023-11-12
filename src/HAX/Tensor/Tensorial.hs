@@ -61,12 +61,11 @@ type family ReverseListImpl (retro :: [a]) (pro :: [a]) :: [a] where
   ReverseListImpl r '[] = r
   ReverseListImpl r (a ': as) = ReverseListImpl (a ': r) as
 type ReverseList l = ReverseListImpl '[] l
-type family InitEq (lhs :: [a]) (rhs :: [a]) (f :: Constraint) :: Constraint where
-  InitEq '[] _ _ = ()
-  InitEq _ '[] _ = ()
-  InitEq (a ': lhs) (a ': rhs) f = InitEq lhs rhs f
-  InitEq _ _ f   = f
-type TailEq lhs rhs f = InitEq (ReverseList lhs) (ReverseList rhs) f
+
+type family (x :: [a]) ++ (y :: [a]) :: [a] where
+  '[] ++ b = b
+  a ++ '[] = a
+  (a ': as) ++ b = a ': (as ++ b)
 
 type family IsPrefixOf (prefix :: [a]) (string :: [a]) (f :: Constraint) :: Constraint where
   IsPrefixOf '[] _ _ = ()
@@ -154,16 +153,29 @@ type family Last (list :: [a]) :: a where
 
 type Middle l = Init (Tail l)
 
-type family ConvResult (outfeat :: Nat) (input :: Shape) (output :: Shape) :: Shape where
-  ConvResult outfeat '[]       '[]       = '[outfeat]
-  ConvResult outfeat (i ': is) (k ': ks) = (i - k + 1) ': ConvResult outfeat is ks
-  ConvResult _ _ _ = TypeError (Text "Mismatch shape")
-type Convolution (input :: Shape) (kernel :: Shape) (output :: Shape) = (KnownShape input, KnownShape kernel, KnownShape output, Head kernel ~ Last input, output ~ (Head input ': ConvResult (Last kernel) (Middle input) (Middle kernel)))
-
 type family Iota (dim :: Nat) (shape :: Shape) :: Constraint where 
   Iota _ '[] = TypeError (Text "Tensor rank is less then required by iota dim.")
   Iota 0 _   = ()
   Iota n (_ ': as) = Iota (n - 1) as
+
+type family ZipWith (x :: [a]) (y :: [b]) (f :: a -> b -> c) :: [c] where
+  ZipWith '[] _ _ = '[]
+  ZipWith _ '[] _ = '[]
+  ZipWith (a ': as) (b ': bs) f = f a b ': ZipWith as bs f
+
+type family Foldl (x :: a) (f :: a -> b -> a) (y :: [b]) :: a where
+  Foldl a _ '[] = a
+  Foldl a f (b ': bs) = Foldl (f a b) f bs 
+
+type ConcatConstraint (a :: Constraint) (b :: Constraint) = (a, b) :: Constraint
+
+type family ConvolutionShapeConstraint (input :: Shape) (kernel :: Shape) (output :: Shape) :: Constraint where
+  ConvolutionShapeConstraint '[] '[] '[] = ()
+  ConvolutionShapeConstraint (i ': is) (k ': ks) (o ': os) = (i + 1 - k ~ o, o + k - 1 ~ i, i + 1 - o ~ k, ConvolutionShapeConstraint is ks os)
+  ConvolutionShapeConstraint _ _ _ = TypeError (Text "Spatial rank in convolution is not the same")
+
+type Convolution (input :: Shape) (kernel :: Shape) (output :: Shape) = (KnownShape input, KnownShape kernel, KnownShape output, Head input ~ Head output, Last input ~ Head kernel, Last kernel ~ Last output, ConvolutionShapeConstraint (Middle input) (Middle kernel) (Middle output))
+type Convolution' (input :: Shape) (kernel :: Shape) (output :: Shape) = (KnownShape input, KnownShape kernel, KnownShape output, Last input ~ Head kernel, Last kernel ~ Last output, ConvolutionShapeConstraint (Init input) (Middle kernel) (Init output))
 
 -- Tensorial
 class (Prim (StorageType a), Storable (StorageType a), TypeGet (SHLOType a)) => Tensorial a where
@@ -186,6 +198,8 @@ class (Prim (StorageType a), Storable (StorageType a), TypeGet (SHLOType a)) => 
 
   literalPad  :: a
 
+  comparisonType :: Proxy a -> ComparisonTypeAttr
+
 
 instance Tensorial Float where
   type SHLOType Float = F32Type
@@ -206,6 +220,8 @@ instance Tensorial Float where
   toHaskell   = id
   
   literalPad = 0
+  comparisonType _ = ComparisonTypeFloat
+
   
 instance Tensorial Word8 where
   type SHLOType Word8 = IntegerType
@@ -226,6 +242,7 @@ instance Tensorial Word8 where
   toHaskell   = id
 
   literalPad = 0
+  comparisonType _ = ComparisonTypeUnsigned
 
 instance Tensorial Int64 where
   type SHLOType Int64 = IntegerType
@@ -241,11 +258,12 @@ instance Tensorial Int64 where
   elemsConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
     where attr  = DenseIntOrFPElements _type value
           _type = RankedTensorType shape I64 NullAttr
-  
+
   fromHaskell = id
   toHaskell   = id
 
   literalPad = 0
+  comparisonType _ = ComparisonTypeSigned
 
 newtype Pred = Pred Word8 deriving (Num, Eq, Prim, Storable)
 instance Show Pred where 
@@ -271,6 +289,7 @@ instance Tensorial Bool where
   toHaskell (Pred i) = i > 0
 
   literalPad = False
+  comparisonType _ = ComparisonTypeUnsigned
 
 type family ListItem a where
   ListItem [a] = a
@@ -299,6 +318,7 @@ type family NotFunction f :: Constraint where
   NotFunction (a -> b) = TypeError (ShowType (a -> b) :<>: Text " is a function!")
   NotFunction _        = ()
 
+-- TODO: Implement dynamic length structures like list
 class NotFunction t => TraceableElement t where -- Undecidable super class extension because of this
   constructTracer   :: NotFunction t => CIntPtr -> (CIntPtr, t, [AnyType])
   deconstructTracer :: NotFunction t => t -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
@@ -378,8 +398,8 @@ tensorType _ = RankedTensorType shape _type NullAttr
 tensorType' :: T s t => Proxy (a s t) -> AnyType 
 tensorType' = toAnyType . tensorType
 
-class (Tensorial f, Tensorial g) => ConvertOp (r :: Shape -> Type -> Type) f g where
-  convert :: KnownShape s => r s f -> r s g
+class ConvertOp (r :: Shape -> Type -> Type) where
+  convert :: (T s f, T s g) => r s f -> r s g
 
 class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
   -- without type checking, internal use only
@@ -402,6 +422,19 @@ class Tensorial t => ShapeOp (a :: Shape -> Type -> Type) t where
 
   -- TODO: Move this to a different class
   splat :: (KnownShape s) => t -> a s t
+
+onehot :: forall r s c k. (ShapeOp r Bool, MathOp r Int64, EqualOp r Int64, KnownShape s, KnownNat c, k ~ (s ++ '[c]), c ~ Last k, KnownShape k, s ~ Init k) => r s Int64 -> r k Bool
+onehot indices = isEQ c i
+  where c :: r k Int64 = unsafeBroadcast indices [0..r - 1] 
+        i :: r k Int64 = unsafeIota r
+        r = shapeRank (Proxy :: Proxy s)
+  
+
+
+(@%) :: forall r t n ns. (ShapeOp r t, KnownNat n, KnownShape ns, Num (r '[] Int64)) => r (n ': ns) t -> Integer -> r ns t
+operand @% (fromInteger -> index :: r '[] Int64) = unsafeGather operand index [0..resultRank - 1] [0] [0] 0 (1:resultShape)
+  where resultRank  = shapeRank (Proxy :: Proxy ns)
+        resultShape = shapeVal  (Proxy :: Proxy ns)
 
 unsafeDiagonal :: forall s0 s1 r t. (ShapeOp r t, T s0 t, T s1 t, MathOp r Int64) => Integer -> Integer -> r s0 t -> r s1 t
 unsafeDiagonal keepAxes removeAxes input = assert (inputShape !! fromInteger keepAxes == inputShape !! fromInteger removeAxes) $ 
@@ -453,8 +486,8 @@ reshape = unsafeReshape
 
 class ShapeOp r t => MathOp r t where
   unsafeDotGeneral  :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> DotDimensionNumbersAttr -> r s2 t
-  unsafeReduceAdd   :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
-  unsafeReduceMul   :: (KnownShape s0, KnownShape s1, Num t) => r s0 t -> [Integer] -> r s1 t
+  unsafeReduceAdd   :: (KnownShape s0, KnownShape s1) => r s0 t -> [Integer] -> r s1 t
+  unsafeReduceMul   :: (KnownShape s0, KnownShape s1) => r s0 t -> [Integer] -> r s1 t
 
   -- For padding, use explicitly pad the input, this simplify gradient calculation, similarly for dialation
   unsafeConvolution :: (KnownShape s0, KnownShape s1, KnownShape s2) => r s0 t -> r s1 t -> r s2 t
@@ -463,24 +496,28 @@ class ShapeOp r t => MathOp r t where
   -- TODO: Move this to a different class
   linspace :: (KnownNat n, Fractional t, Enum t) => (t, t) -> r '[n] t
 
-unsafeMultiIota :: forall r s t. (MathOp r t, KnownShape s) => [Integer] -> Integer -> r s t
-unsafeMultiIota []     _ = error "idim needs to be given"
-unsafeMultiIota [a]    d = assert (shapeVal (Proxy :: Proxy s) !! fromInteger d == 1) unsafeIota a
-unsafeMultiIota (a:as) d = 
-  reifyShape (changeAt d' (const 1) shape) $ \(same (unsafeIota a) -> a') ->
-    reifyShape (changeAt d' (+(-1)) shape) $ \(same (unsafeMultiIota as d) -> as') ->
-      unsafeConcat d a' as'
-  where changeAt :: Int -> (a -> a) -> [a] -> [a]
-        changeAt i f n
-          | i >= 0    = 
-            let changeAt' _ []     = []
-                changeAt' j (b:bs) = if j == 0 then f b:bs else b:changeAt' (j - 1) bs
-            in  changeAt' i n
-          | otherwise = error "Negative index"
-        shape = shapeVal (Proxy :: Proxy s)
-        same :: KnownShape p => r p t -> Proxy p -> r p t
-        same = const
-        d' = fromInteger d
+  unsafeMultiIota :: forall s. (MathOp r t, KnownShape s) => [Integer] -> Integer -> r s t
+  unsafeMultiIota []     _ = error "idim needs to be given"
+  unsafeMultiIota [a]    d = assert (shapeVal (Proxy :: Proxy s) !! fromInteger d == 1) unsafeIota a
+  unsafeMultiIota (a:as) d = 
+    reifyShape (changeAt d' (const 1) shape) $ \(same (unsafeIota a) -> a') ->
+      reifyShape (changeAt d' (+(-1)) shape) $ \(same (unsafeMultiIota as d) -> as') ->
+        unsafeConcat d a' as'
+    where changeAt :: Int -> (a -> a) -> [a] -> [a]
+          changeAt i f n
+            | i >= 0    = 
+              let changeAt' _ []     = []
+                  changeAt' j (b:bs) = if j == 0 then f b:bs else b:changeAt' (j - 1) bs
+              in  changeAt' i n
+            | otherwise = error "Negative index"
+          shape = shapeVal (Proxy :: Proxy s)
+          same :: KnownShape p => r p t -> Proxy p -> r p t
+          same = const
+          d' = fromInteger d
+-- TODO: Implement safe version of multiiota
+
+
+
 
 
 iota :: (Iota d s, MathOp r t, KnownShape s, KnownNat d) => Proxy d -> r s t
@@ -515,11 +552,9 @@ matmul lhs rhs = unsafeDotGeneral lhs rhs attr
 convolution :: (Convolution input kernel output, MathOp r t) => r input t -> r kernel t -> r output t 
 convolution = unsafeConvolution
 
-convolution' :: forall input kernel output r t. (MathOp r t, KnownShape input, KnownShape output, Convolution (1 ': input) kernel (1 ': output)) => r input t -> r kernel t -> r output t
+convolution' :: forall input kernel output r t. (MathOp r t, Convolution' input kernel output) => r input t -> r kernel t -> r output t
 convolution' input kernel = unsafeReshape (unsafeConvolution input' kernel :: r (1 ': output) t)
-  where rank   = shapeRank (Proxy :: Proxy (1 ': input))
-        idxmap = [1..rank - 1]
-        input' = unsafeBroadcast input idxmap :: r (1 ': input) t
+  where input' = unsafeReshape input :: r (1 ': input) t
 
 class Tensorial t => SelectOp r t where
   branch :: KnownShape s => r s t -> r s t -> r '[] Bool -> r s t
