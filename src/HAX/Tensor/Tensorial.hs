@@ -518,18 +518,14 @@ instance (KnownNat i, TensorLiteral is) => TensorLiteral (i ': is) where
     where f = fromTensorLiteral (Proxy :: Proxy is) p c
 
 
--- Traceable
--- NOTE: Consider separating the arguments of a function and its outputs
--- type family NotFunction f :: Constraint where 
---   NotFunction (a -> b) = TypeError (ShowType (a -> b) :<>: Text " is a function!")
---   NotFunction _        = ()
+type family FirstOrder (f :: Type) :: Constraint where
+  FirstOrder ((a -> b) -> c) = TypeError (Text "Function is not first order")
+  FirstOrder (a -> b)        = FirstOrder b
+  FirstOrder _               = ()
 
--- TODO: Implement dynamic length structures like list
+
 type InputType = AnyType
 type OutputType = AnyType
-
-data DynamismTree = StaticLeaf | DynamicBranch [DynamismTree]
--- StaticLeaf mean that the result size is known at compile time
 class TraceableElement t where 
   constructTracer   :: CIntPtr -> (CIntPtr, t, [AnyType])
   deconstructTracer :: t -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([InputType], [OutputType]))

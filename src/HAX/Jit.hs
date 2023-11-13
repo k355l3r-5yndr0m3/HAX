@@ -12,7 +12,6 @@ import HAX.Utils
 import Control.Exception (assert)
 import Data.Proxy
 import Data.Bifunctor
-import Data.Coerce
 
 import MLIR
 
@@ -21,7 +20,6 @@ import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
 import GHC.IO.Unsafe
 import GHC.TypeError
-import GHC.TypeLits
 
 {-# NOINLINE compile #-}
 compile :: Traceable f => f -> (Int, LoadedExecutable)
@@ -45,7 +43,6 @@ compile f = unsafePerformIO $ (length outs, ) <$> (
 -- Currently, this can only support types where the number of tensors contained within that type is known at compile time
 -- One fix, use fix length list, easier to implement, slight hasel for the user
 -- Two implement a structure that contained the dynamic size
-
 class JitReify f where 
   jitReify   :: Annotated [Buffer] f -> (f, [Buffer])
   jitUnreify :: Annotated [Buffer] a -> f -> Annotated [Buffer] b
@@ -82,3 +79,9 @@ type family JitResult f where
 type J f f' = (Traceable f, Jit f', f' ~ JitResult f)
 jit :: J f f' => f -> f' 
 jit f = jit' (Annotated [] :: Annotated [Buffer] f', compile f)
+
+
+
+
+
+

@@ -2,6 +2,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE LambdaCase #-}
 module HAX.Tensor.Tensor where
 import Prelude hiding (lookup, pred)
 
@@ -21,6 +22,7 @@ import Foreign
 
 import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.IsList
+import MLIR (AnyType)
 
 newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
 newtype AnyTsr = AnyTsr { getAnyTsrBuffer :: Buffer }
@@ -238,3 +240,47 @@ instance (Floating t, T s t) => Floating (Tensor s t) where
   sin = unsafePairwiseSin
   cos = unsafePairwiseCos
   tanh = unsafePairwiseTanh
+
+
+
+
+
+
+-- New way to implement jit
+-- Experimental
+-- class NewJit f where
+--   type NewJitResult f 
+--   newJit :: (f, [(AnyType, Buffer)]) -> NewJitResult f
+-- 
+-- tensorTypeOf :: forall r s t. T s t => r s t -> AnyType
+-- tensorTypeOf _ = tensorType' (Proxy :: Proxy (r s t))
+-- 
+-- class NewJitOut r where
+--   type NewJitOutput r 
+--   jitOut :: r -> ([AnyType], [Buffer] -> (NewJitOutput r, [Buffer]))
+-- 
+-- instance NewJitOut r => NewJitOut [r] where
+--   type NewJitOutput [r] = [NewJitOutput r]
+--   jitOut []     = ([], ([], ))
+--   jitOut (r:rs) = (r' ++ rs', \i -> 
+--     let (k, k') = r''  i
+--         (j, j') = rs'' k'
+--     in  (k:j, j'))
+--     where (r' , r'' ) = jitOut r
+--           (rs', rs'') = jitOut rs
+-- 
+-- instance T s t => NewJitOut (Tracer s t) where
+--   type NewJitOutput (Tracer s t) = Tensor s t
+--   jitOut (tensorTypeOf -> a) = ([a], \case
+--       []   -> error "Not enough output" 
+--       b:bs -> (Tensor b, bs))
+-- 
+-- 
+-- instance NewJitOut (r s t) => NewJit (r s t) where
+--   type NewJitResult (r s t) = NewJitOutput (r s t)
+--   newJit (jitOut -> (outtypes, reifier), unzip -> (intypes, args)) = undefined
+-- 
+-- instance NewJitOut r => NewJit [r] where
+--   type NewJitResult [r] = NewJitOutput [r]
+--   newJit (jitOut -> (outtypes, reifier), unzip -> (intypes, args)) = undefined
+
