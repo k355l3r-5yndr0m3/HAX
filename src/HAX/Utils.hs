@@ -1,4 +1,7 @@
+{-# LANGUAGE DataKinds #-}
 module HAX.Utils where
+import Data.Kind
+import GHC.TypeLits
 
 newtype Annotated a b = Annotated a
 data a <&> b = a :&: b deriving Show

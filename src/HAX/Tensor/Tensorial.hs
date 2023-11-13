@@ -4,7 +4,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE QuantifiedConstraints #-}
-{-# LANGUAGE UndecidableSuperClasses #-}
 {-# LANGUAGE GeneralisedNewtypeDeriving #-}
 {-# LANGUAGE NoStarIsType #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
@@ -179,6 +178,9 @@ type family ConvolutionShapeConstraint (input :: Shape) (kernel :: Shape) (outpu
 
 type Convolution (input :: Shape) (kernel :: Shape) (output :: Shape) = (KnownShape input, KnownShape kernel, KnownShape output, Head input ~ Head output, Last input ~ Head kernel, Last kernel ~ Last output, ConvolutionShapeConstraint (Middle input) (Middle kernel) (Middle output))
 type Convolution' (input :: Shape) (kernel :: Shape) (output :: Shape) = (KnownShape input, KnownShape kernel, KnownShape output, Last input ~ Head kernel, Last kernel ~ Last output, ConvolutionShapeConstraint (Init input) (Middle kernel) (Init output))
+
+shapeOf :: forall r s t. KnownShape s => r s t -> [Integer]
+shapeOf _ = shapeVal (Proxy :: Proxy s)
 
 -- Tensorial
 class (Prim (StorageType t), Storable (StorageType t), TypeGet (SHLOType t)) => Tensorial t where
@@ -518,14 +520,19 @@ instance (KnownNat i, TensorLiteral is) => TensorLiteral (i ': is) where
 
 -- Traceable
 -- NOTE: Consider separating the arguments of a function and its outputs
-type family NotFunction f :: Constraint where 
-  NotFunction (a -> b) = TypeError (ShowType (a -> b) :<>: Text " is a function!")
-  NotFunction _        = ()
+-- type family NotFunction f :: Constraint where 
+--   NotFunction (a -> b) = TypeError (ShowType (a -> b) :<>: Text " is a function!")
+--   NotFunction _        = ()
 
 -- TODO: Implement dynamic length structures like list
-class NotFunction t => TraceableElement t where -- Undecidable super class extension because of this
-  constructTracer   :: NotFunction t => CIntPtr -> (CIntPtr, t, [AnyType])
-  deconstructTracer :: NotFunction t => t -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([AnyType], [AnyType]))
+type InputType = AnyType
+type OutputType = AnyType
+
+data DynamismTree = StaticLeaf | DynamicBranch [DynamismTree]
+-- StaticLeaf mean that the result size is known at compile time
+class TraceableElement t where 
+  constructTracer   :: CIntPtr -> (CIntPtr, t, [AnyType])
+  deconstructTracer :: t -> (IntMap Value -> BlockM (IntMap Value, [Value]), ([InputType], [OutputType]))
 
 instance (TraceableElement a, TraceableElement b) => TraceableElement (a <&> b) where
   constructTracer i0 = (i2, a :&: b, at ++ bt)
@@ -557,6 +564,7 @@ instance (TraceableElement a0, TraceableElement a1) =>
           join (_a, _b) (_c, _d) = (_a ++ _c, _b ++ _d)
           (a0', a0Sig) = deconstructTracer a0
           (a1', a1Sig) = deconstructTracer a1
+
 
 
 -- NOTE: What the performance difference between IntMap Value being outside/inside tuple
@@ -648,7 +656,6 @@ class TensorOp (r :: Shape -> Type -> Type) where
   unsafePairwiseExp    :: (T s t) => r s t -> r s t
   unsafePairwiseLog    :: (T s t) => r s t -> r s t
 
-
   isEQ               :: (T s t) => r s t -> r s t -> r s Bool
   isNE               :: (T s t) => r s t -> r s t -> r s Bool
   isGT               :: (T s t) => r s t -> r s t -> r s Bool
@@ -684,18 +691,38 @@ class TensorOp (r :: Shape -> Type -> Type) where
           same = const
           d' = fromInteger d
 
+  unsafeSplit :: forall s s' t. (T s t, T s' t) => r s t -> [r s' t]
+  unsafeSplit operand = 
+    if sliceShape /= operandShape then 
+      assert (differByOne operandShape sliceShape) [unsafeSlice operand $ slicing i | i <- [0..nstep - 1]]
+    else 
+      [unsafeReshape operand]
+    where operandShape = shapeOf operand
+          sliceShape   = shapeVal (Proxy :: Proxy s')
+          differByOne (a:as) (b:bs) 
+            | a == b    = differByOne as bs 
+            | otherwise = as == bs
+          differByOne _ _ = False
+          differAxis lhs rhs = 
+            let differAxis' i (a:as) (b:bs)
+                  | a == b    = differAxis' (i + 1) as bs 
+                  | otherwise = i
+                differAxis' _ _ _ = undefined
+            in  differAxis' 0 lhs rhs
+          splitAxis = differAxis operandShape sliceShape
+          operandDim = operandShape !! splitAxis
+          sliceDim   = sliceShape   !! splitAxis
+          nstep      = operandDim `div` sliceDim
+          rank       = length operandShape
+          slicing i  = zipWith (\a o -> if a == splitAxis then (i * sliceDim, (i + 1) * sliceDim, 1) else (0, o, 1)) [0..rank - 1] operandShape
 
-
-
-
-
-
-
-
-
-
-
-
+type family Split (lhs :: [a]) (rhs :: [a]) :: Constraint where
+  Split (a ': ls) (a ': rs) = (a ~ a, Split ls rs)
+  Split (a ': ls) (b ': rs) = (ls ~ rs)
+  Split '[] '[] = ()
+  Split _ _ = TypeError (Text "lhs and rhs can only differ by at most one elem")
+split :: (TensorOp r, T s t, T s' t, Split s s') => r s t -> [r s' t]
+split = unsafeSplit
 
 
 

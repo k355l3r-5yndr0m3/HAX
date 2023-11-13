@@ -213,6 +213,9 @@ instance TensorOp Tensor where
   isLT = jit isLT
   isLE = jit isLE
 
+  -- implement unsafeSplit
+  
+
 instance (Num t, T s t) => Num (Tensor s t) where
   (+) = unsafePairwiseAdd
   (-) = unsafePairwiseSub

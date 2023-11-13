@@ -12,6 +12,7 @@ import HAX.Utils
 import Control.Exception (assert)
 import Data.Proxy
 import Data.Bifunctor
+import Data.Coerce
 
 import MLIR
 
@@ -20,7 +21,7 @@ import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
 import GHC.IO.Unsafe
 import GHC.TypeError
-import GHC.TypeLits (Nat)
+import GHC.TypeLits
 
 {-# NOINLINE compile #-}
 compile :: Traceable f => f -> (Int, LoadedExecutable)
@@ -45,8 +46,6 @@ compile f = unsafePerformIO $ (length outs, ) <$> (
 -- One fix, use fix length list, easier to implement, slight hasel for the user
 -- Two implement a structure that contained the dynamic size
 
-data DynamismTree = StaticLeaf | DynamicBranch [DynamismTree]
--- StaticLeaf mean that the result size is known at compile time
 class JitReify f where 
   jitReify   :: Annotated [Buffer] f -> (f, [Buffer])
   jitUnreify :: Annotated [Buffer] a -> f -> Annotated [Buffer] b
