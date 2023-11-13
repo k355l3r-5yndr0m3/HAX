@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 module Main where
+import Data.Proxy
 import HAX.Tensor
 import HAX.Target
 
@@ -41,7 +42,7 @@ training ((x, y):ds) (a, b) = do
 
 main :: IO ()
 main = do 
-  let x :: Tensor '[128] Float = linspace (-5, 5) 
+  let x :: Tensor '[128] Float = linspace (Proxy :: Proxy 0) (-5, 5) 
       y = -4 * x + 5 + fst (tensorUniformR (-0.2, 0.2) (mkStdGen 52))
       a :: Tensor '[] Float = 1
       b :: Tensor '[] Float = -6

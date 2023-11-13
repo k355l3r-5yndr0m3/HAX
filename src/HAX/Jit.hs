@@ -20,6 +20,7 @@ import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
 import GHC.IO.Unsafe
 import GHC.TypeError
+import GHC.TypeLits (Nat)
 
 {-# NOINLINE compile #-}
 compile :: Traceable f => f -> (Int, LoadedExecutable)
@@ -40,8 +41,14 @@ compile f = unsafePerformIO $ (length outs, ) <$> (
     return bytecode))
   where (blkM, (ins, outs)) = trace f
 
+-- Currently, this can only support types where the number of tensors contained within that type is known at compile time
+-- One fix, use fix length list, easier to implement, slight hasel for the user
+-- Two implement a structure that contained the dynamic size
+
+data DynamismTree = StaticLeaf | DynamicBranch [DynamismTree]
+-- StaticLeaf mean that the result size is known at compile time
 class JitReify f where 
-  jitReify :: Annotated [Buffer] f -> (f, [Buffer])
+  jitReify   :: Annotated [Buffer] f -> (f, [Buffer])
   jitUnreify :: Annotated [Buffer] a -> f -> Annotated [Buffer] b
 
 instance (JitReify a, JitReify b) => JitReify (a <&> b) where
@@ -67,6 +74,7 @@ type family JitTransform a
 type instance JitTransform (a -> b)  = TypeError (Text "Jit should not receive high order function.")
 type instance JitTransform (Proxy a) = Proxy a 
 type instance JitTransform (a <&> b) = JitTransform a <&> JitTransform b
+type instance JitTransform [a]     = [JitTransform a] -- Dynamically sized, needed to be recorded
 type family JitResult f where
   JitResult (a ->  b) = JitTransform a -> JitResult b
   JitResult a         = JitTransform a

@@ -242,7 +242,7 @@ main = do
 
 
 
-  print (linspace (0, 1) :: Tensor '[5] Float)
+  print (linspace (Proxy :: Proxy 0) (0, 1) :: Tensor '[5] Float)
   
   print (jit test27 [[0, 4, 3, 1, 5],
                      [4, 1, 3, 7, 1],

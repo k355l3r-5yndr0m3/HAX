@@ -17,7 +17,6 @@ import Data.Primitive
 import Foreign
 
 import GHC.StableName
-import GHC.TypeLits
 
 import MLIR
 
@@ -57,8 +56,6 @@ instance (T s t, TensorLiteral s, [i] ~ Literal s t) => IsList (Tracer s t) wher
   fromList l = mkTracer $ retval $ elemsConstant shape value
     where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
           value = fromTensorLiteral (Proxy :: Proxy s) literalPad id l :: [t]
-          
-
 
 mkTracer :: TracerM Value -> Tracer s t
 mkTracer (TracerM f) = Tracer f
@@ -80,84 +77,12 @@ retval :: BlockM Value -> TracerM Value
 retval v = TracerM $ \ table -> 
   (table, ) <$> v
 
-instance (KnownShape s, Tensorial t, Num t) => Num (Tracer s t) where
-  lhs + rhs = mkTracer $ do 
-    _lhs <- sharing lhs
-    _rhs <- sharing rhs
-    retval $ SHLO._AddOp _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
-  lhs - rhs = mkTracer $ do 
-    _lhs <- sharing lhs
-    _rhs <- sharing rhs
-    retval $ SHLO._SubtractOp _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-    
-  lhs * rhs = mkTracer $ do 
-    _lhs <- sharing lhs
-    _rhs <- sharing rhs
-    retval $ SHLO._MulOp _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-  
-  signum operand = mkTracer $ do
-    _operand <- sharing operand
-    retval $ SHLO._SignOp _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
-  negate operand = mkTracer $ do 
-    _operand <- sharing operand 
-    retval $ SHLO._NegOp _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
-  abs    operand = mkTracer $ do 
-    _operand <- sharing operand
-    retval $ SHLO._AbsOp _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
-  fromInteger literal = mkTracer $ do 
-    retval $ splatConstant shape a
-    where shape  = fromInteger <$> shapeVal (Proxy :: Proxy s)
-          a :: t = fromInteger literal
-
-instance (T s t, Fractional t) => Fractional (Tracer s t) where
-  lhs / rhs = mkTracer $ do 
-    _lhs <- sharing lhs
-    _rhs <- sharing rhs
-    retval $ SHLO._DivOp _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
-  fromRational literal = mkTracer $ do 
-    retval $ splatConstant shape a
-    where shape  = fromIntegral <$> shapeVal (Proxy :: Proxy s)
-          a :: t = fromRational literal
-
 
 -- TODO: Implement more trig funcs
-instance (T s t, Floating t) => Floating (Tracer s t) where
-  pi = fromRational (toRational (pi :: Double))
-  sin operand = mkTracer $ do 
-    _operand <- sharing operand 
-    retval $ SHLO._SineOp _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-  cos operand = mkTracer $ do 
-    _operand <- sharing operand 
-    retval $ SHLO._CosineOp _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+-- instance (T s t, Floating t) => Floating (Tracer s t) where
+--   pi = fromRational (toRational (pi :: Double))
+-- 
 
-  tanh operand = mkTracer $ do 
-    _operand <- sharing operand 
-    retval $ SHLO._TanhOp _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
-  exp operand = mkTracer $ do 
-    _operand <- sharing operand 
-    retval $ SHLO._ExpOp _operand _type 
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
-
-  log operand = mkTracer $ do 
-    _operand <- sharing operand 
-    retval $ SHLO._LogOp _operand _type 
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 -- ConvertOp
 instance ConvertOp Tracer where
@@ -220,7 +145,7 @@ unsafeReduceTracer operand body (splat -> initvalue :: Tracer '[] t) dims = mkTr
         scalar = tensorType' (Proxy :: Proxy (Tracer '[] t))
 
 
-instance ShapeOp Tracer where
+instance TensorOp Tracer where
   unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeBroadcast operand idxmap@(BroadcastMap . fmap fromInteger -> _map) = 
     assert correctness $ mkTracer $ do 
@@ -341,14 +266,6 @@ instance ShapeOp Tracer where
           lhsOtherAxes = remove (fromInteger dims) $ shapeVal (Proxy :: Proxy s0)
           rhsOtherAxes = remove (fromInteger dims) $ shapeVal (Proxy :: Proxy s1)
 
-
-instance MathOp Tracer where
-  -- TODO: Implement a better linspace
-  linspace :: forall n t. (KnownNat n, Fractional t, Enum t, Tensorial t) => (t, t) -> Tracer '[n] t
-  linspace (low, high) = splat step * unsafeIota 0
-    where step = (high - low) / (n - 1)
-          n    = fromInteger $ natVal (Proxy :: Proxy n)
-
   unsafeReduceAdd operand = unsafeReduceTracer operand SHLO._AddOp 0
   unsafeReduceMul operand = unsafeReduceTracer operand SHLO._MulOp 1
 
@@ -394,8 +311,8 @@ instance MathOp Tracer where
 
 
 
-instance Tensorial t => SelectOp Tracer t where
-  branch :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer '[] Bool -> Tracer s t
+-- instance Tensorial t => SelectOp Tracer t where
+  branch :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer '[] Bool -> Tracer s t
   branch false true cond = mkTracer $ do 
     _false <- sharing false 
     _true  <- sharing true 
@@ -403,7 +320,7 @@ instance Tensorial t => SelectOp Tracer t where
     retval $ SHLO._SelectOp _cond _true _false _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
-  select :: forall s. KnownShape s => Tracer s t -> Tracer s t -> Tracer s Bool -> Tracer s t
+  select :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s Bool -> Tracer s t
   select false true cond = mkTracer $ do 
     _false <- sharing false 
     _true  <- sharing true 
@@ -412,7 +329,7 @@ instance Tensorial t => SelectOp Tracer t where
     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
 
-instance EqualOp Tracer where
+-- instance EqualOp Tracer where
   isEQ :: forall s t. T s t => Tracer s t -> Tracer s t -> Tracer s Bool
   isEQ lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
@@ -428,7 +345,7 @@ instance EqualOp Tracer where
     where ct = comparisonType (Proxy :: Proxy t)
           tt = tensorType' (Proxy :: Proxy (Tracer s Bool))
 
-instance OrderOp Tracer where
+-- instance OrderOp Tracer where
   isGT :: forall s t. T s t => Tracer s t -> Tracer s t -> Tracer s Bool
   isGT lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
@@ -457,3 +374,141 @@ instance OrderOp Tracer where
     retval $ SHLO._CompareOp ComparisonDirectionLE (Just ctype) _lhs _rhs _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s Bool))
           ctype = comparisonType (Proxy :: Proxy t)
+
+  unsafePairwiseAdd :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s t
+  unsafePairwiseAdd lhs rhs = mkTracer $ do 
+     _lhs <- sharing lhs
+     _rhs <- sharing rhs
+     retval $ SHLO._AddOp _lhs _rhs _type
+     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
+
+  unsafePairwiseSub  :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s t
+  unsafePairwiseSub lhs rhs = mkTracer $ do 
+     _lhs <- sharing lhs
+     _rhs <- sharing rhs
+     retval $ SHLO._SubtractOp _lhs _rhs _type
+     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     
+  unsafePairwiseMul  :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s t
+  unsafePairwiseMul lhs rhs = mkTracer $ do 
+     _lhs <- sharing lhs
+     _rhs <- sharing rhs
+     retval $ SHLO._MulOp _lhs _rhs _type
+     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+   
+  unsafePairwiseSignum :: forall s t. (T s t) => Tracer s t -> Tracer s t
+  unsafePairwiseSignum operand = mkTracer $ do
+     _operand <- sharing operand
+     retval $ SHLO._SignOp _operand _type
+     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+ 
+  unsafePairwiseNegate :: forall s t. (T s t) => Tracer s t -> Tracer s t
+  unsafePairwiseNegate operand = mkTracer $ do 
+     _operand <- sharing operand 
+     retval $ SHLO._NegOp _operand _type
+     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+ 
+  unsafePairwiseAbs    :: forall s t. (T s t) => Tracer s t -> Tracer s t
+  unsafePairwiseAbs    operand = mkTracer $ do 
+     _operand <- sharing operand
+     retval $ SHLO._AbsOp _operand _type
+     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
+  unsafePairwiseDiv  :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s t
+  unsafePairwiseDiv lhs rhs = mkTracer $ do 
+     _lhs <- sharing lhs
+     _rhs <- sharing rhs
+     retval $ SHLO._DivOp _lhs _rhs _type
+     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
+  unsafePairwiseSin :: forall s t. (T s t) => Tracer s t -> Tracer s t
+  unsafePairwiseSin operand = mkTracer $ do 
+    _operand <- sharing operand 
+    retval $ SHLO._SineOp _operand _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+  unsafePairwiseCos :: forall s t. (T s t) => Tracer s t -> Tracer s t
+  unsafePairwiseCos operand = mkTracer $ do 
+    _operand <- sharing operand 
+    retval $ SHLO._CosineOp _operand _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+  unsafePairwiseTanh :: forall s t. (T s t) => Tracer s t -> Tracer s t
+  unsafePairwiseTanh operand = mkTracer $ do 
+    _operand <- sharing operand 
+    retval $ SHLO._TanhOp _operand _type
+    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
+  unsafePairwiseExp    :: forall s t. (T s t) => Tracer s t -> Tracer s t
+  unsafePairwiseExp operand = mkTracer $ do 
+     _operand <- sharing operand 
+     retval $ SHLO._ExpOp _operand _type 
+     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+  unsafePairwiseLog    :: forall s t. (T s t) => Tracer s t -> Tracer s t
+  unsafePairwiseLog operand = mkTracer $ do 
+     _operand <- sharing operand 
+     retval $ SHLO._LogOp _operand _type 
+     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+
+
+instance (Num t, T s t) => Num (Tracer s t) where
+  (+) = unsafePairwiseAdd
+  (-) = unsafePairwiseSub
+  (*) = unsafePairwiseMul
+
+  abs = unsafePairwiseAbs
+  negate = unsafePairwiseNegate
+  signum = unsafePairwiseSignum
+
+  fromInteger = splat . fromInteger
+
+instance (Fractional t, T s t) => Fractional (Tracer s t) where
+  (/) = unsafePairwiseDiv
+  fromRational = splat . fromRational
+
+instance (Floating t, T s t) => Floating (Tracer s t) where
+  pi = splat pi
+  exp = unsafePairwiseExp
+  log = unsafePairwiseLog
+  sin = unsafePairwiseSin
+  cos = unsafePairwiseCos
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

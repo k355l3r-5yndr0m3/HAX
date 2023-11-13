@@ -69,7 +69,7 @@ instance IsList (r s t) => IsList (Target r s t) where
 
   fromList = Target [] . fromList
 
-capture :: forall r s t. (T s t, ShapeOp r, ShapeConstr r t, Transformable r) => Target r s t -> [Integer] -> r s t 
+capture :: forall r s t. (T s t, TensorOp r, Transformable r) => Target r s t -> [Integer] -> r s t 
 capture (Target di u) dmax 
   | di == dmax = u
   | otherwise  = assert (di `isSuffixOf` dmax) $
@@ -84,7 +84,7 @@ capture (Target di u) dmax
           in  coerce $! t1
         mapping = fromIntegral <$> take (length src) [length dst - length src..]
 
-binary :: (T s0 t0, T s1 t1, Transformable r, ShapeOp r, ShapeConstr r t0, ShapeConstr r t1) => Target r s0 t0 -> Target r s1 t1 -> ([Integer], r s0 t0, r s1 t1)
+binary :: (T s0 t0, T s1 t1, Transformable r, TensorOp r) => Target r s0 t0 -> Target r s1 t1 -> ([Integer], r s0 t0, r s1 t1)
 binary l@(Target ld lhs) r@(Target rd rhs) 
   | ld == rd           = (ld, lhs, rhs)
   | ld `isSuffixOf` rd = 
@@ -95,74 +95,13 @@ binary l@(Target ld lhs) r@(Target rd rhs)
     in  (ld, lhs, rhs')
   | otherwise = error $ "The impossible has happen: " ++ show ld ++ " vs " ++ show rd 
 
-tertiary :: (T s0 t0, T s1 t1, T s2 t2, Transformable r, ShapeOp r, ShapeConstr r t0, ShapeConstr r t1, ShapeConstr r t2) => Target r s0 t0 -> Target r s1 t1 -> Target r s2 t2 -> ([Integer], r s0 t0, r s1 t1, r s2 t2)
+tertiary :: (T s0 t0, T s1 t1, T s2 t2, Transformable r, TensorOp r) => Target r s0 t0 -> Target r s1 t1 -> Target r s2 t2 -> ([Integer], r s0 t0, r s1 t1, r s2 t2)
 tertiary a@(Target ad _) b@(Target bd _) c@(Target cd _) = (dims, capture a dims, capture b dims, capture c dims)
   where dims
           | length ad > length bd = if length ad > length cd then ad else cd
           | length bd > length cd = bd
           | otherwise             = cd
 
-instance (T s t, forall s'. KnownShape s' => Num (r s' t), ShapeOp r, Transformable r, ShapeConstr r t) => Num (Target r s t) where
-  lhs + rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
-    where (dim, _lhs, _rhs) = binary lhs rhs
-          result :: forall s'. KnownShape s' => Proxy s' -> r s t 
-          result _ = coerce $! (coerce _lhs + coerce _rhs :: r s' t)
-
-  lhs - rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
-    where (dim, _lhs, _rhs) = binary lhs rhs
-          result :: forall s'. KnownShape s' => Proxy s' -> r s t 
-          result _ = coerce $! (coerce _lhs - coerce _rhs :: r s' t)
-
-  lhs * rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
-    where (dim, _lhs, _rhs) = binary lhs rhs
-          result :: forall s'. KnownShape s' => Proxy s' -> r s t 
-          result _ = coerce $! (coerce _lhs * coerce _rhs :: r s' t)
-
-  abs (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (abs $ coerce operand :: r s' t)
-
-  signum (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (signum $ coerce operand :: r s' t)
-
-  negate (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (negate $ coerce operand :: r s' t)
-
-  fromInteger i = Target [] (fromInteger i)
-
-instance (T s t, forall s'. KnownShape s' => Fractional (r s' t), ShapeOp r, Transformable r, ShapeConstr r t) => Fractional (Target r s t) where
-  lhs / rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
-    where (dim, _lhs, _rhs) = binary lhs rhs
-          result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (coerce _lhs / coerce _rhs :: r s' t)
-  
-  recip (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (recip $ coerce operand :: r s' t)
-
-  fromRational r = Target [] (fromRational r)
-
-instance (T s t, forall s'. KnownShape s' => Floating (r s' t), ShapeOp r, Transformable r, ShapeConstr r t) => Floating (Target r s t) where
-  pi = Target [] pi
-
-  sin (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (sin $ coerce operand :: r s' t)
-  cos (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (cos $ coerce operand :: r s' t)
-  tanh (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (tanh $ coerce operand :: r s' t)
-
-  exp (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (exp $ coerce operand :: r s' t)
-  log (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
-    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
-          result _ = coerce $! (log $ coerce operand :: r s' t)
 
 instance (ConvertOp r, Transformable r) => ConvertOp (Target r) where
   convert :: forall s f g. (T s f, T s g) => Target r s f -> Target r s g
@@ -175,10 +114,10 @@ instance (ConvertOp r, Transformable r) => ConvertOp (Target r) where
           scoerce :: Coercible (r a b) (r c b) => r a b -> r c b
           scoerce = coerce 
 
-instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
-  type ShapeConstr (Target r) t = (ShapeConstr r t, ShapeConstr r Int64, MathConstr r Int64) 
+instance (TensorOp r, Transformable r) => TensorOp (Target r) where
+--  type ShapeConstr (Target r) t = (ShapeConstr r Int64, MathConstr r Int64) 
   -- NOTE: haskell cannot determine the write method to call so this is a fix
-  unsafeBroadcast :: forall s0 s1 t. (ShapeConstr r t, T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
+  unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeBroadcast (Target dim operand) _map = Target dim $ 
     reifyShape (dim ++ shapeVal (Proxy :: Proxy s0)) $ \ s0' -> 
       reifyShape (dim ++ shapeVal (Proxy :: Proxy s1)) $ \ s1' -> 
@@ -190,7 +129,7 @@ instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
                 t1 :: r s1' t = unsafeBroadcast t0 _map' 
             in  coerce $! t1
 
-  unsafeTranspose :: forall s0 s1 t. (ShapeConstr r t, T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
+  unsafeTranspose :: forall s0 s1 t. (T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeTranspose (Target dim operand) perm = Target dim $ 
     reifyShape (dim ++ shapeVal (Proxy :: Proxy s0)) $ \s -> 
       reifyShape (dim ++ shapeVal (Proxy :: Proxy s1)) $ \s' ->
@@ -202,7 +141,7 @@ instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
             in  coerce $! t1
           perm' = [0..fromIntegral (length dim - 1)] ++ map (+ (fromIntegral $ length dim)) perm
 
-  unsafeReshape :: forall s0 s1 t. (ShapeConstr r t, ShapeOp r, T s0 t, T s1 t) => Target r s0 t -> Target r s1 t
+  unsafeReshape :: forall s0 s1 t. (TensorOp r, T s0 t, T s1 t) => Target r s0 t -> Target r s1 t
   unsafeReshape (Target dim operand) = Target dim $
     reifyShape (dim ++ shapeVal (Proxy :: Proxy s0)) $ \s0 ->
       reifyShape (dim ++ shapeVal (Proxy :: Proxy s1)) $ \s1 ->
@@ -212,7 +151,7 @@ instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
             let operand' :: r z0 t = coerce operand
             in  coerce $! (unsafeReshape operand' :: r z1 t)
 
-  unsafeSlice :: forall s0 s1 t. (ShapeConstr r t, T s0 t, T s1 t) => Target r s0 t -> [(Integer, Integer, Integer)] -> Target r s1 t
+  unsafeSlice :: forall s0 s1 t. (T s0 t, T s1 t) => Target r s0 t -> [(Integer, Integer, Integer)] -> Target r s1 t
   unsafeSlice (Target dims operand) slicing = Target dims $ 
     reifyShape (dims ++ shapeVal (Proxy :: Proxy s0)) $ 
       reifyShape (dims ++ shapeVal (Proxy :: Proxy s1))
@@ -224,7 +163,7 @@ instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
             in  coerce $! _result
           slicing' = fmap (0, , 1) dims ++ slicing
 
-  unsafePad :: forall s0 s1 t. (ShapeConstr r t, T s0 t, T s1 t) => t -> Target r s0 t -> [(Integer, Integer, Integer)] -> Target r s1 t
+  unsafePad :: forall s0 s1 t. (T s0 t, T s1 t) => t -> Target r s0 t -> [(Integer, Integer, Integer)] -> Target r s1 t
   unsafePad padval (Target dims operand) padding = Target dims $ 
     reifyShape (dims ++ shapeVal (Proxy :: Proxy s0)) $ 
       reifyShape (dims ++ shapeVal (Proxy :: Proxy s1))
@@ -236,7 +175,7 @@ instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
             in  coerce $! _result
           padding' = ((0, 0, 0) <$ dims) ++ padding
 
-  unsafeReverse :: forall s t. (ShapeConstr r t, MathConstr r Int64, T s t) => Target r s t -> [Integer] -> Target r s t
+  unsafeReverse :: forall s t. (T s t) => Target r s t -> [Integer] -> Target r s t
   unsafeReverse (Target dims operand) reverseDims = Target dims $ 
     reifyShape (dims ++ shapeVal (Proxy :: Proxy s)) result
     where result :: forall s0'. KnownShape s0' => Proxy s0' -> r s t
@@ -246,7 +185,7 @@ instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
             in  undefined
           offset = fromIntegral $ length dims
   
-  unsafeGather :: forall s0 s1 s2 t. (ShapeConstr r t, ShapeConstr r Int64, MathConstr r Int64, T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> [Integer] -> Target r s2 t
+  unsafeGather :: forall s0 s1 s2 t. (T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 Int64 -> [Integer] -> [Integer] -> [Integer] -> Integer -> [Integer] -> Target r s2 t
   unsafeGather (Target [] operand) (Target [] start) offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = Target [] $ 
     unsafeGather operand start offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes
   unsafeGather (Target batching operand) (Target [] start) offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = Target batching $ 
@@ -300,7 +239,7 @@ instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
           sameR :: Target r s t -> Proxy s -> Target r s t
           sameR = const
   
-  unsafeScatter :: forall s0 s1 s2 t. (ShapeConstr r t, MathConstr r Int64, ShapeConstr r Int64, T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 Int64 -> Target r s2 t -> [Integer] -> [Integer] -> [Integer] -> Integer -> Target r s0 t
+  unsafeScatter :: forall s0 s1 s2 t. (T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 Int64 -> Target r s2 t -> [Integer] -> [Integer] -> [Integer] -> Integer -> Target r s0 t
   unsafeScatter (Target [] input) (Target [] indices) (Target [] update) uwd iwd sdtod ivd = Target [] $ unsafeScatter input indices update uwd iwd sdtod ivd
   unsafeScatter input (Target [] indices) update uwd iwd sdtod ivd = 
     reifyShape (batching ++ shapeVal (Proxy :: Proxy s0)) $ \inputShapeProxy ->
@@ -349,7 +288,7 @@ instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
             | otherwise = error "Negative index"
           
   
-  unsafeConcat :: forall s0 s1 s2 t. (ShapeConstr r t, T s0 t, T s1 t, T s2 t) => Integer -> Target r s0 t -> Target r s1 t -> Target r s2 t
+  unsafeConcat :: forall s0 s1 s2 t. (T s0 t, T s1 t, T s2 t) => Integer -> Target r s0 t -> Target r s1 t -> Target r s2 t
   unsafeConcat d lhs rhs = Target b $
     reifyShape (b ++ shapeVal (Proxy :: Proxy s0)) $ \(same (coerce _lhs) -> lhs') ->
       reifyShape (b ++ shapeVal (Proxy :: Proxy s1)) $ \(same (coerce _rhs) -> rhs') -> 
@@ -361,9 +300,8 @@ instance (ShapeOp r, Transformable r, MathOp r) => ShapeOp (Target r) where
 
   splat = Target [] . splat
 
-instance (MathOp r, Transformable r) => MathOp (Target r) where
-  type MathConstr (Target r) t = (MathConstr r t, ShapeConstr r t, MathConstr r Int64)
-  unsafeDotGeneral :: forall s0 s1 s2 t. (MathConstr r t, ShapeConstr r t, T s0 t, T s1 t, T s2 t, Num t) => Target r s0 t -> Target r s1 t -> DotDimensionNumbersAttr -> Target r s2 t
+-- instance (MathOp r, Transformable r) => MathOp (Target r) where
+  unsafeDotGeneral :: forall s0 s1 s2 t. (T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 t -> DotDimensionNumbersAttr -> Target r s2 t
   unsafeDotGeneral lhs rhs attr = Target dims $ 
     reifyShape s0 $ \ s0' -> 
       reifyShape s1 $ \ s1' -> 
@@ -388,7 +326,7 @@ instance (MathOp r, Transformable r) => MathOp (Target r) where
                 t2 :: r s2' t = unsafeDotGeneral t0 t1 attr'
             in  coerce $! t2
 
-  unsafeReduceAdd :: forall s0 s1 t. (MathConstr r t, T s0 t, T s1 t, Num t) => Target r s0 t -> [Integer] -> Target r s1 t
+  unsafeReduceAdd :: forall s0 s1 t. (T s0 t, T s1 t, Num t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeReduceAdd (Target dims operand) axies = Target dims $ 
     reifyShape s0 $ \ s0' -> reifyShape s1 $ \ s1' -> 
       result s0' s1'
@@ -401,7 +339,7 @@ instance (MathOp r, Transformable r) => MathOp (Target r) where
                 t1 :: r s1' t = unsafeReduceAdd t0 axies'
             in  coerce $! t1
 
-  unsafeReduceMul :: forall s0 s1 t. (MathConstr r t, T s0 t, T s1 t, Num t) => Target r s0 t -> [Integer] -> Target r s1 t
+  unsafeReduceMul :: forall s0 s1 t. (T s0 t, T s1 t, Num t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeReduceMul (Target dims operand) axies = Target dims $ 
     reifyShape s0 $ \ s0' -> reifyShape s1 $ \ s1' -> 
       result s0' s1'
@@ -414,7 +352,7 @@ instance (MathOp r, Transformable r) => MathOp (Target r) where
                 t1 :: r s1' t = unsafeReduceMul t0 axies'
             in  coerce $! t1
 
-  unsafeConvolution :: forall s0 s1 s2 t. (ShapeConstr r t, MathConstr r t, MathConstr r Int64, T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 t -> Target r s2 t
+  unsafeConvolution :: forall s0 s1 s2 t. (T s0 t, T s1 t, T s2 t) => Target r s0 t -> Target r s1 t -> Target r s2 t
   unsafeConvolution (Target dims input) (Target [] kernel) = Target dims $ -- degenerate case
     reifyShape (dims ++ inputShape) $
       reifyShape convInShape $ 
@@ -467,10 +405,75 @@ instance (MathOp r, Transformable r) => MathOp (Target r) where
           
 
   unsafeIota dims = Target [] $ unsafeIota dims
-  linspace = Target [] . linspace
+  unsafeLinspace axis = Target [] . unsafeLinspace axis
 
-instance (SelectOp r t, Transformable r, ShapeOp r, ShapeOp (Target r), ShapeConstr r Bool, ShapeConstr r Int64, MathConstr r Int64, ShapeConstr r t) => SelectOp (Target r) t where
-  branch :: forall s. (KnownShape s) => Target r s t -> Target r s t -> Target r '[] Bool -> Target r s t
+
+  unsafePairwiseAdd :: forall s t. (T s t) => Target r s t -> Target r s t -> Target r s t
+  unsafePairwiseAdd lhs rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
+    where (dim, _lhs, _rhs) = binary lhs rhs
+          result :: forall s'. KnownShape s' => Proxy s' -> r s t 
+          result _ = coerce $! (coerce _lhs `unsafePairwiseAdd` coerce _rhs :: r s' t)
+
+  unsafePairwiseSub :: forall s t. (T s t) => Target r s t -> Target r s t -> Target r s t
+  unsafePairwiseSub lhs rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
+    where (dim, _lhs, _rhs) = binary lhs rhs
+          result :: forall s'. KnownShape s' => Proxy s' -> r s t 
+          result _ = coerce $! (coerce _lhs `unsafePairwiseSub` coerce _rhs :: r s' t)
+
+  unsafePairwiseMul :: forall s t. (T s t) => Target r s t -> Target r s t -> Target r s t
+  unsafePairwiseMul lhs rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
+    where (dim, _lhs, _rhs) = binary lhs rhs
+          result :: forall s'. KnownShape s' => Proxy s' -> r s t 
+          result _ = coerce $! (coerce _lhs `unsafePairwiseMul` coerce _rhs :: r s' t)
+
+  unsafePairwiseDiv :: forall s t. (T s t) => Target r s t -> Target r s t -> Target r s t
+  unsafePairwiseDiv lhs rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
+    where (dim, _lhs, _rhs) = binary lhs rhs
+          result :: forall s'. KnownShape s' => Proxy s' -> r s t 
+          result _ = coerce $! (coerce _lhs `unsafePairwiseDiv` coerce _rhs :: r s' t)
+
+  unsafePairwiseAbs :: forall s t. (T s t) => Target r s t -> Target r s t
+  unsafePairwiseAbs (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
+    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
+          result _ = coerce $! (unsafePairwiseAbs $ coerce operand :: r s' t)
+
+  unsafePairwiseNegate :: forall s t. (T s t) => Target r s t -> Target r s t
+  unsafePairwiseNegate (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
+    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
+          result _ = coerce $! (unsafePairwiseNegate $ coerce operand :: r s' t)
+
+  unsafePairwiseSignum :: forall s t. (T s t) => Target r s t -> Target r s t
+  unsafePairwiseSignum (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
+    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
+          result _ = coerce $! (unsafePairwiseSignum $ coerce operand :: r s' t)
+
+  unsafePairwiseExp :: forall s t. (T s t) => Target r s t -> Target r s t
+  unsafePairwiseExp (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
+    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
+          result _ = coerce $! (unsafePairwiseExp $ coerce operand :: r s' t)
+
+  unsafePairwiseLog :: forall s t. (T s t) => Target r s t -> Target r s t
+  unsafePairwiseLog (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
+    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
+          result _ = coerce $! (unsafePairwiseLog $ coerce operand :: r s' t)
+
+  unsafePairwiseSin :: forall s t. (T s t) => Target r s t -> Target r s t
+  unsafePairwiseSin (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
+    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
+          result _ = coerce $! (unsafePairwiseSin $ coerce operand :: r s' t)
+
+  unsafePairwiseCos :: forall s t. (T s t) => Target r s t -> Target r s t
+  unsafePairwiseCos (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
+    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
+          result _ = coerce $! (unsafePairwiseCos $ coerce operand :: r s' t)
+
+  unsafePairwiseTanh :: forall s t. (T s t) => Target r s t -> Target r s t
+  unsafePairwiseTanh (Target d operand) = Target d $ reifyShape (d ++ shapeVal (Proxy :: Proxy s)) result
+    where result :: forall s'. KnownShape s' => Proxy s' -> r s t
+          result _ = coerce $! (unsafePairwiseTanh $ coerce operand :: r s' t)
+
+-- instance (SelectOp r t, Transformable r, ShapeOp r, ShapeOp (Target r), ShapeConstr r Bool, ShapeConstr r Int64, MathConstr r Int64, ShapeConstr r t) => SelectOp (Target r) t where
+  branch :: forall s t. (T s t) => Target r s t -> Target r s t -> Target r '[] Bool -> Target r s t
   branch false true (Target [] cond) = Target dims $ 
     reifyShape (dims ++ shape) $ \s ->
       result s
@@ -483,7 +486,7 @@ instance (SelectOp r t, Transformable r, ShapeOp r, ShapeOp (Target r), ShapeCon
             in  coerce $! branch f t cond
   branch false true cond = select false true (unsafeBroadcast cond [])
 
-  select :: forall s. KnownShape s => Target r s t -> Target r s t -> Target r s Bool -> Target r s t
+  select :: forall s t. (T s t) => Target r s t -> Target r s t -> Target r s Bool -> Target r s t
   select false true cond = Target dims $
     reifyShape (dims ++ shape) $ \s -> 
       result s
@@ -494,7 +497,7 @@ instance (SelectOp r t, Transformable r, ShapeOp r, ShapeOp (Target r), ShapeCon
             let f :: r s' t     = coerce false'
                 t :: r s' t     = coerce true'
             in  coerce $! select f t (coerce cond')
-instance (EqualOp r, ShapeOp r, Transformable r) => EqualOp (Target r) where
+-- instance (EqualOp r, ShapeOp r, Transformable r) => EqualOp (Target r) where
   isEQ :: forall s t. (T s t) => (Target r) s t -> (Target r) s t -> (Target r) s Bool
   isEQ lhs rhs = Target dims $ 
     reifyShape (dims ++ shape) $ \s ->
@@ -517,7 +520,7 @@ instance (EqualOp r, ShapeOp r, Transformable r) => EqualOp (Target r) where
             let lhs' :: r _s t = coerce _lhs
                 rhs' :: r _s t = coerce _rhs
             in  coerce $! isNE lhs' rhs'
-instance (OrderOp r, ShapeOp r, Transformable r) => OrderOp (Target r) where
+-- instance (OrderOp r, ShapeOp r, Transformable r) => OrderOp (Target r) where
   isGT :: forall s t. T s t => (Target r) s t -> (Target r) s t -> (Target r) s Bool
   isGT lhs rhs = Target dims $ 
     reifyShape (dims ++ shape) $ \s ->
@@ -563,19 +566,45 @@ instance (OrderOp r, ShapeOp r, Transformable r) => OrderOp (Target r) where
                 rhs' :: r _s t = coerce _rhs
             in  coerce $! isLE lhs' rhs'
 
+
+instance (Num t, T s t, TensorOp r, Transformable r) => Num (Target r s t) where
+  (+) = unsafePairwiseAdd
+  (-) = unsafePairwiseSub
+  (*) = unsafePairwiseMul
+
+  abs = unsafePairwiseAbs
+  negate = unsafePairwiseNegate
+  signum = unsafePairwiseSignum
+
+  fromInteger = splat . fromInteger
+
+instance (Fractional t, T s t, TensorOp r, Transformable r) => Fractional (Target r s t) where
+  (/) = unsafePairwiseDiv
+  fromRational = splat . fromRational
+
+instance (Floating t, T s t, TensorOp r, Transformable r) => Floating (Target r s t) where
+  pi = splat pi
+  exp = unsafePairwiseExp
+  log = unsafePairwiseLog
+  sin = unsafePairwiseSin
+  cos = unsafePairwiseCos
+
+
+
+
 -- VMap transform
 class Vectorizable f where
   type Vectorized (i :: Nat) f = r | r -> i f
   vmap' :: KnownNat i => [Integer] -> ([Integer] -> f) -> Vectorized i f
 
-instance (T s t, ShapeOp r, Transformable r) => Vectorizable (Target r s t) where
+instance (T s t, TensorOp r, Transformable r) => Vectorizable (Target r s t) where
   type Vectorized i (Target r s t) = Target r (i ': s) t
   vmap' :: forall i. KnownNat i => [Integer] -> ([Integer] -> Target r s t) -> Vectorized i (Target r s t)
   vmap' dimmax f = Target dimmax $ coerce t
     where i = natVal (Proxy :: Proxy i)
           t = capture (f dimmax) (dimmax ++ [i])
 
-instance (T s t, ShapeOp r, Transformable r, Vectorizable f) => Vectorizable (Target r s t -> f) where
+instance (T s t, TensorOp r, Transformable r, Vectorizable f) => Vectorizable (Target r s t -> f) where
   type Vectorized i (Target r s t -> f) = Target r (i ': s) t -> Vectorized i f
   vmap' :: forall i. KnownNat i => [Integer] -> ([Integer] -> Target r s t -> f) -> Vectorized i (Target r s t -> f)
   vmap' dimmax f arg@(Target ds _) = vmap' dimmax' f'

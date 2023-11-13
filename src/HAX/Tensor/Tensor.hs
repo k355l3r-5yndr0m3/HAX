@@ -21,7 +21,6 @@ import Foreign
 
 import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.IsList
-import GHC.TypeLits
 
 newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
 newtype AnyTsr = AnyTsr { getAnyTsrBuffer :: Buffer }
@@ -156,39 +155,11 @@ jit f = jit' $! jitData
 --       This is probably because the LoadedExecutable ref count to zero 
 --       so it needs to be repeatedly recompiled
 --       Possible solution, stableptr
-instance (T s t, Num t) => Num (Tensor s t) where
-  (+) = jit (+)
-  (-) = jit (-)
-  (*) = jit (*)
-
-  signum = jit signum
-  abs    = jit abs
-  negate = jit negate
-
-  fromInteger = unsafePerformIO . tensorSplat defaultDevice . fromIntegral
-
-instance (T s t, Fractional t) => Fractional (Tensor s t) where
-  (/) = jit (/)
-  recip = jit recip
-
-  fromRational = unsafePerformIO . tensorSplat defaultDevice . fromRational
-
-instance (T s t, Floating t) => Floating (Tensor s t) where
-  pi = unsafePerformIO $ tensorSplat defaultDevice pi
-
-  sin = jit sin
-  cos = jit cos
-  tan = jit tan
-
-  tanh = jit tanh
-
-  exp = jit exp
-  log = jit log
 
 instance ConvertOp Tensor where
   convert = jit convert
 
-instance ShapeOp Tensor where
+instance TensorOp Tensor where
   unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand
   unsafeTranspose operand perm = jit (`unsafeTranspose` perm) operand
   unsafeReshape = jit unsafeReshape
@@ -202,8 +173,8 @@ instance ShapeOp Tensor where
 
   splat a = unsafePerformIO $ tensorSplat defaultDevice a
 
-instance MathOp Tensor where
-  linspace = jit . linspace
+-- instance MathOp Tensor where
+  unsafeLinspace axis = jit . unsafeLinspace axis
 
   unsafeDotGeneral lhs rhs attr = jit (\ _lhs _rhs -> unsafeDotGeneral _lhs _rhs attr) lhs rhs
 
@@ -215,11 +186,52 @@ instance MathOp Tensor where
 
   unsafeMultiIota ds d = jit $ unsafeMultiIota ds d
 
-instance Tensorial t => SelectOp Tensor t where
+-- instance Tensorial t => SelectOp Tensor t where
   branch = jit branch
   select = jit select
 
+  unsafePairwiseAdd = jit unsafePairwiseAdd
+  unsafePairwiseSub = jit unsafePairwiseSub
+  unsafePairwiseMul = jit unsafePairwiseMul
+  unsafePairwiseDiv = jit unsafePairwiseDiv
 
-instance EqualOp Tensor where
+  unsafePairwiseAbs = jit unsafePairwiseAbs
+  unsafePairwiseNegate = jit unsafePairwiseNegate
+  unsafePairwiseSignum = jit unsafePairwiseSignum
+  unsafePairwiseSin = jit unsafePairwiseSin
+  unsafePairwiseCos = jit unsafePairwiseCos
+  unsafePairwiseTanh = jit unsafePairwiseTanh
+  unsafePairwiseExp = jit unsafePairwiseExp
+  unsafePairwiseLog = jit unsafePairwiseLog
+
+-- instance EqualOp Tensor where
   isEQ = jit isEQ
   isNE = jit isNE
+
+  isGT = jit isGT
+  isGE = jit isGE
+  isLT = jit isLT
+  isLE = jit isLE
+
+instance (Num t, T s t) => Num (Tensor s t) where
+  (+) = unsafePairwiseAdd
+  (-) = unsafePairwiseSub
+  (*) = unsafePairwiseMul
+
+  abs = unsafePairwiseAbs
+  negate = unsafePairwiseNegate
+  signum = unsafePairwiseSignum
+
+  fromInteger = splat . fromInteger
+
+instance (Fractional t, T s t) => Fractional (Tensor s t) where
+  (/) = unsafePairwiseDiv
+  fromRational = splat . fromRational
+
+instance (Floating t, T s t) => Floating (Tensor s t) where
+  pi = splat pi
+  exp = unsafePairwiseExp
+  log = unsafePairwiseLog
+  sin = unsafePairwiseSin
+  cos = unsafePairwiseCos
+  tanh = unsafePairwiseTanh

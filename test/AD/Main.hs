@@ -43,7 +43,7 @@ test7 diag = unsafeIota 0 * unsafeScatter 0 starts diag [] [0, 1] [0, 1] 1
 test8 :: R [5, 2, 2] Float -> R [5, 2] Float
 test8 = vmap (unsafeDiagonal 0 1 :: R '[2, 2] Float -> R '[2] Float)
 
-test9 :: ShapeOp R t => R [10, 5, 2] t -> R '[10, 2] t
+test9 :: Tensorial t => R [10, 5, 2] t -> R '[10, 2] t
 test9 x = unsafeGather x starts [1] [0, 1] [0, 1] 1 [1, 1, 2]
   where starts :: R '[10, 2] Int64 = [[0, 1], [5, 3], [0, 3], [9, 2], [0, 0], [9, 4], [5, 1], [7, 3], [1, 1], [4, 3]]
 
