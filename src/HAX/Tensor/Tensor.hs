@@ -3,13 +3,14 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DefaultSignatures #-}
 module HAX.Tensor.Tensor where
 import Prelude hiding (lookup, pred)
 
 import HAX.Tensor.Tracer
 import HAX.Tensor.Tensorial
 
-import HAX.Jit hiding (jit)
+import HAX.Jit
 import HAX.PjRt
 import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.BufferType
@@ -19,10 +20,13 @@ import Data.Proxy
 import Data.Primitive hiding (newArray)
 
 import Foreign
+import Foreign.C (CIntPtr)
+
+import MLIR
 
 import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.IsList
-import MLIR (AnyType)
+
 
 newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
 newtype AnyTsr = AnyTsr { getAnyTsrBuffer :: Buffer }
@@ -41,7 +45,7 @@ toTensor' (getAnyTsrBuffer -> buffer) =
   if (shape == bufferDimensions buffer) && (_type == bufferElementType buffer) then 
     Tensor buffer
   else
-    error $ "Wrong shape and/or dtype (Actural: " ++ show shape ++ ")"
+    error $ "Wrong shape and/or dtype (Correct: " ++ show (bufferDimensions buffer) ++ " " ++ show (bufferElementType buffer) ++ ", Incorrect: " ++ show shape ++ " " ++ show _type ++ ")"
   where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
         _type = pjrtBufferType (Proxy :: Proxy t)
 
@@ -128,14 +132,6 @@ tensorSplat device a = do
   tensorFromHostBufferGC device content
   where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
 
-instance JitReify (Tensor s t) where
-  jitReify (Annotated (a:as)) = (Tensor a, as)
-  jitReify (Annotated [])     = error "Program did not produced enough outputs"
-
-  jitUnreify (Annotated args) (Tensor buffer) = Annotated (args ++ [buffer])
-
-
-type instance JitTransform (Tracer s t) = Tensor s t
 
 -- Implement a jit the convert from function of tracers to tensors 
 type family JitTracerTransform f
@@ -145,78 +141,63 @@ type family JitTracer f where
   JitTracer (a <&> b) = JitTracer a <&> JitTracer b
   JitTracer a         = JitTracerTransform a
 
--- NOTE: Putting NOINLINE pragma here decrease instances of 
---       repeated compilation, but does not elimenate all 
---       instances
-{-# NOINLINE jit #-}
-jit :: forall f f'. (Traceable f, f' ~ JitResult f, Jit f', f ~ JitTracer f') => f -> f'
-jit f = jit' $! jitData
-  where jitData = (Annotated [] :: Annotated [Buffer] f', compile f)
-
--- TODO: Solve repeated compilation
---       This is probably because the LoadedExecutable ref count to zero 
---       so it needs to be repeatedly recompiled
---       Possible solution, stableptr
-
 instance ConvertOp Tensor where
-  convert = jit convert
+  convert = jitT convert
 
 instance TensorOp Tensor where
-  unsafeBroadcast operand dims = jit (`unsafeBroadcast` dims) operand
-  unsafeTranspose operand perm = jit (`unsafeTranspose` perm) operand
-  unsafeReshape = jit unsafeReshape
-  unsafeSlice operand slicing = jit (`unsafeSlice` slicing) operand
-  unsafeReverse operand dims = jit (`unsafeReverse` dims) operand
-  unsafeScatter input indices update uwd iwd sdtod ivd = jit (\inp ind upd -> unsafeScatter inp ind upd uwd iwd sdtod ivd) input indices update
-  unsafeGather operand start offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = jit (\op st -> unsafeGather op st offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes) operand start
-  unsafeConcat d = jit (unsafeConcat d)
+  unsafeBroadcast operand dims = jitT (`unsafeBroadcast` dims) operand
+  unsafeTranspose operand perm = jitT (`unsafeTranspose` perm) operand
+  unsafeReshape = jitT unsafeReshape
+  unsafeSlice operand slicing = jitT (`unsafeSlice` slicing) operand
+  unsafeReverse operand dims = jitT (`unsafeReverse` dims) operand
+  unsafeScatter input indices update uwd iwd sdtod ivd = jitT (\inp ind upd -> unsafeScatter inp ind upd uwd iwd sdtod ivd) input indices update
+  unsafeGather operand start offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = jitT (\op st -> unsafeGather op st offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes) operand start
+  unsafeConcat d = jitT (unsafeConcat d)
 
-  unsafePad t v p = jit (\v' -> unsafePad t v' p) v
+  unsafePad t v p = jitT (\v' -> unsafePad t v' p) v
 
   splat a = unsafePerformIO $ tensorSplat defaultDevice a
 
--- instance MathOp Tensor where
-  unsafeLinspace axis = jit . unsafeLinspace axis
+  unsafeLinspace axis = jitT . unsafeLinspace axis
 
-  unsafeDotGeneral lhs rhs attr = jit (\ _lhs _rhs -> unsafeDotGeneral _lhs _rhs attr) lhs rhs
+  unsafeDotGeneral lhs rhs attr = jitT (\ _lhs _rhs -> unsafeDotGeneral _lhs _rhs attr) lhs rhs
 
-  unsafeReduceAdd operand axies = jit (`unsafeReduceAdd` axies) operand
-  unsafeReduceMul operand axies = jit (`unsafeReduceMul` axies) operand
+  unsafeReduceAdd operand axies = jitT (`unsafeReduceAdd` axies) operand
+  unsafeReduceMul operand axies = jitT (`unsafeReduceMul` axies) operand
 
-  unsafeIota i = jit (unsafeIota i)
-  unsafeConvolution = jit unsafeConvolution
+  unsafeIota i = jitT (unsafeIota i)
+  unsafeConvolution = jitT unsafeConvolution
 
-  unsafeMultiIota ds d = jit $ unsafeMultiIota ds d
+  unsafeMultiIota ds d = jitT $ unsafeMultiIota ds d
 
--- instance Tensorial t => SelectOp Tensor t where
-  branch = jit branch
-  select = jit select
+  branch = jitT branch
+  select = jitT select
 
-  unsafePairwiseAdd = jit unsafePairwiseAdd
-  unsafePairwiseSub = jit unsafePairwiseSub
-  unsafePairwiseMul = jit unsafePairwiseMul
-  unsafePairwiseDiv = jit unsafePairwiseDiv
+  unsafePairwiseAdd = jitT unsafePairwiseAdd
+  unsafePairwiseSub = jitT unsafePairwiseSub
+  unsafePairwiseMul = jitT unsafePairwiseMul
+  unsafePairwiseDiv = jitT unsafePairwiseDiv
 
-  unsafePairwiseAbs = jit unsafePairwiseAbs
-  unsafePairwiseNegate = jit unsafePairwiseNegate
-  unsafePairwiseSignum = jit unsafePairwiseSignum
-  unsafePairwiseSin = jit unsafePairwiseSin
-  unsafePairwiseCos = jit unsafePairwiseCos
-  unsafePairwiseTanh = jit unsafePairwiseTanh
-  unsafePairwiseExp = jit unsafePairwiseExp
-  unsafePairwiseLog = jit unsafePairwiseLog
+  unsafePairwiseAbs = jitT unsafePairwiseAbs
+  unsafePairwiseNegate = jitT unsafePairwiseNegate
+  unsafePairwiseSignum = jitT unsafePairwiseSignum
+  unsafePairwiseSin = jitT unsafePairwiseSin
+  unsafePairwiseCos = jitT unsafePairwiseCos
+  unsafePairwiseTanh = jitT unsafePairwiseTanh
+  unsafePairwiseExp = jitT unsafePairwiseExp
+  unsafePairwiseLog = jitT unsafePairwiseLog
 
 -- instance EqualOp Tensor where
-  isEQ = jit isEQ
-  isNE = jit isNE
+  isEQ = jitT isEQ
+  isNE = jitT isNE
 
-  isGT = jit isGT
-  isGE = jit isGE
-  isLT = jit isLT
-  isLE = jit isLE
+  isGT = jitT isGT
+  isGE = jitT isGE
+  isLT = jitT isLT
+  isLE = jitT isLE
 
-  -- implement unsafeSplit
-  
+  unsafeSplit = jitT unsafeSplit
+
 
 instance (Num t, T s t) => Num (Tensor s t) where
   (+) = unsafePairwiseAdd
@@ -241,46 +222,123 @@ instance (Floating t, T s t) => Floating (Tensor s t) where
   cos = unsafePairwiseCos
   tanh = unsafePairwiseTanh
 
+-- Maybe merge Tensor and Tracer
+class Jit f where
+  type JitF f
+
+  jit' :: CIntPtr -> [(Buffer, AnyType)] -> f -> JitF f
+  default jit' :: (JitOut f, JitF f ~ JitO f) => CIntPtr -> [(Buffer, AnyType)] -> f -> JitF f
+  jit' _ (unzip -> (args, ins)) !t = unsafePerformIO $ do 
+    program <- compile (ins, main, outs)
+    fst . reifier <$> loadedExecutableExecute1Await program args Nothing nout
+    where (main, outs, reifier) = jitOut t
+          nout = length outs
+
+instance forall r (s :: Shape) t. JitOut (r s t) => Jit (r s t) where
+  type JitF (r s t) = JitO (r s t)
+
+instance JitOut [t] => Jit [t] where
+  type JitF [t] = JitO [t]
+
+instance JitOut (l <&> r) => Jit (l <&> r) where
+  type JitF (l <&> r) = JitO (l <&> r)
+
+instance JitOut (l, r) => Jit (l, r) where
+  type JitF (l, r) = JitO (l, r)
+
+instance (JitIn a, Jit b) => Jit (a -> b) where
+  type JitF (a -> b) = JitI a -> JitF b
+  jit' i args !f a = jit' i' args' f'
+    where (i', t, a') = jitIn i a
+          f'          = f t
+          args'       = args ++ a'
 
 
+class JitIn t where
+  type JitI t
+  jitIn :: CIntPtr -> JitI t -> (CIntPtr, t, [(Buffer, AnyType)])
+instance JitIn a => JitIn [a] where
+  type JitI [a] = [JitI a]
+  jitIn i []     = (i, [], [])
+  jitIn i (a:as) = (i'', a':as', a'' ++ as'')
+    where (i' , a' , a'' ) = jitIn i  a
+          (i'', as', as'') = jitIn i' as
+instance (JitIn a, JitIn b) => JitIn (a, b) where
+  type JitI (a, b) = (JitI a, JitI b)
+  jitIn i (a, b) = (i'', (a', b'), a'' ++ b'')
+    where (i' , a', a'') = jitIn i  a
+          (i'', b', b'') = jitIn i' b
+instance (JitIn a, JitIn b) => JitIn (a <&> b) where
+  type JitI (a <&> b) = JitI a <&> JitI b
+  jitIn i (a :&: b) = (i'', a' :&: b', a'' ++ b'')
+    where (i' , a', a'') = jitIn i  a
+          (i'', b', b'') = jitIn i' b
+
+instance T s t => JitIn (Tracer s t) where
+  type JitI (Tracer s t) = Tensor s t
+  jitIn i (Tensor buffer) = (i + 1, Tracer $ \t -> (t, ) <$> blockArg i, [(buffer, tensorType' (Proxy :: Proxy (Tracer s t)))])
+
+class JitOut t where
+  type JitO t
+  jitOut :: t -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (JitO t, [Buffer]))
+instance JitOut a => JitOut [a] where
+  type JitO [a] = [JitO a]
+  jitOut []     = (pure . (, []), [], ([], ))
+  jitOut (t:ts) = (\tbl -> do 
+    (tbl', t') <- tc tbl
+    (tbl'', ts') <- tsc tbl' 
+    return (tbl'', t'++ts'), tt++tst, \bs -> 
+      let (t' , bs')  = tr bs
+          (ts', bs'') = tsr bs'
+      in  (t':ts', bs''))
+    where (tc, tt, tr)    = jitOut t
+          (tsc, tst, tsr) = jitOut ts
+instance (JitOut a, JitOut b) => JitOut (a, b) where
+  type JitO (a, b) = (JitO a, JitO b)
+  jitOut (a, b) = (\tbl -> do 
+    (tbl' , a') <- ac tbl 
+    (tbl'', b') <- bc tbl' 
+    return (tbl'', a' ++ b'), 
+    at ++ bt, 
+    \bs -> 
+      let (a', bs')  = ar bs
+          (b', bs'') = br bs'
+      in  ((a', b'), bs''))
+    where (ac, at, ar) = jitOut a
+          (bc, bt, br) = jitOut b
+instance (JitOut a, JitOut b) => JitOut (a <&> b) where
+  type JitO (a <&> b) = (JitO a <&> JitO b)
+  jitOut (a :&: b) = (\tbl -> do 
+    (tbl' , a') <- ac tbl 
+    (tbl'', b') <- bc tbl' 
+    return (tbl'', a' ++ b'), 
+    at ++ bt, 
+    \bs -> 
+      let (a', bs')  = ar bs
+          (b', bs'') = br bs'
+      in  (a' :&: b', bs''))
+    where (ac, at, ar) = jitOut a
+          (bc, bt, br) = jitOut b
+instance T s t => JitOut (Tracer s t) where
+  type JitO (Tracer s t) = Tensor s t
+  jitOut (Tracer t) = (\tbl -> do 
+    fmap (:[]) <$> t tbl, [tensorType' (Proxy :: Proxy (Tracer s t))], \case 
+      []   -> error "Not enough output"
+      a:as -> (Tensor a, as))
+
+type family ReverseJit f = f' | f' -> f where
+  ReverseJit (a -> b)     = ReverseJit a -> ReverseJit b
+  ReverseJit [a]          = [ReverseJit a]
+  ReverseJit (a, b)       = (ReverseJit a, ReverseJit b)
+  ReverseJit (a <&> b)    = ReverseJit a <&> ReverseJit b
+  ReverseJit (Tensor s t) = Tracer s t
 
 
+-- This new jit might cause problem because of the unsafePerformIO, NOINLINE might solve one instance in the test
+-- Given how slow the test ran, I guess that recompilation occure every time jit is called
+-- TODO: Implement cache
+jit :: Jit f => f -> JitF f
+jit = jit' 0 []
 
--- New way to implement jit
--- Experimental
--- class NewJit f where
---   type NewJitResult f 
---   newJit :: (f, [(AnyType, Buffer)]) -> NewJitResult f
--- 
--- tensorTypeOf :: forall r s t. T s t => r s t -> AnyType
--- tensorTypeOf _ = tensorType' (Proxy :: Proxy (r s t))
--- 
--- class NewJitOut r where
---   type NewJitOutput r 
---   jitOut :: r -> ([AnyType], [Buffer] -> (NewJitOutput r, [Buffer]))
--- 
--- instance NewJitOut r => NewJitOut [r] where
---   type NewJitOutput [r] = [NewJitOutput r]
---   jitOut []     = ([], ([], ))
---   jitOut (r:rs) = (r' ++ rs', \i -> 
---     let (k, k') = r''  i
---         (j, j') = rs'' k'
---     in  (k:j, j'))
---     where (r' , r'' ) = jitOut r
---           (rs', rs'') = jitOut rs
--- 
--- instance T s t => NewJitOut (Tracer s t) where
---   type NewJitOutput (Tracer s t) = Tensor s t
---   jitOut (tensorTypeOf -> a) = ([a], \case
---       []   -> error "Not enough output" 
---       b:bs -> (Tensor b, bs))
--- 
--- 
--- instance NewJitOut (r s t) => NewJit (r s t) where
---   type NewJitResult (r s t) = NewJitOutput (r s t)
---   newJit (jitOut -> (outtypes, reifier), unzip -> (intypes, args)) = undefined
--- 
--- instance NewJitOut r => NewJit [r] where
---   type NewJitResult [r] = NewJitOutput [r]
---   newJit (jitOut -> (outtypes, reifier), unzip -> (intypes, args)) = undefined
-
+jitT :: (Jit f, f ~ ReverseJit (JitF f)) => f -> JitF f
+jitT = jit

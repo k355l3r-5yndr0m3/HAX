@@ -2,6 +2,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ImpredicativeTypes #-}
 module HAX.Tensor.Tracer where
 import Prelude hiding (lookup)
 
@@ -9,8 +10,8 @@ import HAX.Tensor.Tensorial
 
 import Control.Exception
 
-import Data.IntMap.Strict hiding (singleton, null, map, foldl)
-import Data.List (singleton)
+import Data.IntMap.Strict hiding (singleton, null, map, foldl, lookup)
+import qualified Data.IntMap.Strict as I
 import Data.Proxy
 import Data.Primitive
 
@@ -24,17 +25,29 @@ import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
 import GHC.IsList
 
-newtype Tracer (s :: Shape) t = Tracer (IntMap Value -> BlockM (IntMap Value, Value))
--- For tracing
--- TODO: Put somewhere else
-instance T s t => TraceableElement (Tracer s t) where
-  constructTracer i = (i + 1, Tracer $ \ a -> (a, ) <$> blockArg i, [_type])
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+newtype StableNameHashTable a = StableNameHashTable (IntMap [(forall b. StableName b -> Bool, a)])
+lookupStableName :: StableName a -> StableNameHashTable b -> Maybe b
+lookupStableName name (StableNameHashTable table) = 
+  case I.lookup hash table of
+    Nothing -> Nothing
+    Just ls -> 
+      let search :: [(forall b. StableName b -> Bool, a)] -> Maybe a
+          search []          = Nothing
+          search ((l, v):as) = 
+            if l name then 
+              Just v 
+            else 
+              search as
+      in  search ls
+  where hash = hashStableName name
+insertStableName :: StableName a -> b -> StableNameHashTable b -> StableNameHashTable b
+insertStableName name value (StableNameHashTable table) = 
+  StableNameHashTable $ insertWith (++) hash [(eqStableName name, value)] table
+  where hash = hashStableName name
 
-  deconstructTracer u = (fmap (fmap singleton) . sharing' u, ([], [_type]))
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+newtype Tracer (s :: Shape) t = Tracer (StableNameHashTable Value -> BlockM (StableNameHashTable Value, Value))
 
-newtype TracerM a = TracerM (IntMap Value -> BlockM (IntMap Value, a))
+newtype TracerM a = TracerM (StableNameHashTable Value -> BlockM (StableNameHashTable Value, a))
 instance Functor TracerM where
   fmap f (TracerM a) = TracerM $ \ t0 -> do 
     (t1, a') <- a t0 
@@ -60,28 +73,22 @@ instance (T s t, TensorLiteral s, [i] ~ Literal s t) => IsList (Tracer s t) wher
 mkTracer :: TracerM Value -> Tracer s t
 mkTracer (TracerM f) = Tracer f
 
-sharing' :: forall s t. Tracer s t -> IntMap Value -> BlockM (IntMap Value, Value)
-sharing' tracer table = do 
-  hash <- blockRunIO (hashStableName <$> (makeStableName $! tracer))
-  case lookup hash table of
+-- Some how the new jiting method produce hash collision !?
+sharing' :: forall s t. T s t => Tracer s t -> StableNameHashTable Value -> BlockM (StableNameHashTable Value, Value)
+sharing' tracer@(Tracer f) table = do 
+  name <- blockRunIO (makeStableName $! tracer)
+  case lookupStableName name table of
     Just item -> return (table, item)
-    Nothing   -> 
-      let Tracer f = tracer 
-      in do 
-        (table', value) <- f table
-        return (insert hash value table', value)
-sharing :: forall s t. Tracer s t -> TracerM Value 
+    Nothing   -> do 
+      (table', item) <- f table
+      return (insertStableName name item table', item)
+
+sharing :: forall s t. T s t => Tracer s t -> TracerM Value 
 sharing tracer = TracerM (sharing' tracer)
 
 retval :: BlockM Value -> TracerM Value
 retval v = TracerM $ \ table -> 
   (table, ) <$> v
-
-
--- TODO: Implement more trig funcs
--- instance (T s t, Floating t) => Floating (Tracer s t) where
---   pi = fromRational (toRational (pi :: Double))
--- 
 
 
 -- ConvertOp

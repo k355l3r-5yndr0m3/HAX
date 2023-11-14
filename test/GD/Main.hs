@@ -30,3 +30,4 @@ gd i x = do
 main :: IO ()
 main = do 
   print =<< gd 64 [[4, 6, 2, 8, 2], [-5, -6, -1, -5, 0], [5, -1, 6, -8, 2], [5, -7, -7, 1, 5], [-5, 2, 7, -6, -2]]
+  echoNumCompilations

@@ -29,7 +29,7 @@ loss' :: Tensor '[128] Float
 loss' = jit $ rgrad loss
 
 lr :: Fractional f => f
-lr = 0.0001
+lr = 0.0002
 
 training :: [(Tensor '[128] Float, Tensor '[128] Float)]
                  -> (Tensor '[] Float, Tensor '[] Float)
@@ -46,5 +46,5 @@ main = do
       y = -4 * x + 5 + fst (tensorUniformR (-0.2, 0.2) (mkStdGen 52))
       a :: Tensor '[] Float = 1
       b :: Tensor '[] Float = -6
-  (a', b') <- training (replicate 128 (x, y)) (a, b)
+  (a', b') <- training (replicate 512 (x, y)) (a, b)
   print (a', b')

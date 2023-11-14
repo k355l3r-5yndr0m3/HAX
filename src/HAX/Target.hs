@@ -5,7 +5,7 @@
 {-# LANGUAGE ViewPatterns #-}
 module HAX.Target where
 import HAX.Tensor.Tensorial
-import HAX.Tensor.Tensor (Tensor)
+import HAX.Tensor.Tensor
 
 import HAX.AD.Gradient
 import HAX.AD.Reverse
@@ -618,13 +618,13 @@ vmap f = vmap' [] (const f)
 
 -- So that Target work for other transformations
 -- TODO: Implement a feature for vmaping gradient function
-instance (T s t, TraceableElement (r s t), Transformable r) => TraceableElement (Target r s t) where
-  constructTracer i = (i', Target [] t, tt)
-    where (i', t, tt) = constructTracer i
-  
-  deconstructTracer (Target [] t) = 
-    deconstructTracer t
-  deconstructTracer _ = error "deconstructTracer received an invalid target."
+-- instance (T s t, TraceableElement (r s t), Transformable r) => TraceableElement (Target r s t) where
+--   constructTracer i = (i', Target [] t, tt)
+--     where (i', t, tt) = constructTracer i
+--   
+--   deconstructTracer (Target [] t) = 
+--     deconstructTracer t
+--   deconstructTracer _ = error "deconstructTracer received an invalid target."
 
 instance Reversable (Reverse r s t) => Reversable (Target (Reverse r) s t) where
   type ReversedType (Target (Reverse r) s t) = ReversedType (Reverse r s t)
@@ -640,4 +640,12 @@ instance (Reversable j, Num (r s t)) => ReverseMode (j -> Target (Reverse r) s t
     where Target dims r = f $ snd $ constructReverse i t
   rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i  -> (_, g, Gradient g')) = assert (null g') g
 
-type instance JitTransform (Target r s t) = Tensor s t
+-- type instance JitTransform (Target r s t) = Tensor s t
+instance JitIn (r s t) => JitIn (Target r s t) where
+  type JitI (Target r s t) = JitI (r s t)
+  jitIn i t = (i', Target [] t', bs)
+    where (i', t', bs) = jitIn i t
+
+instance JitOut (r s t) => JitOut (Target r s t) where
+  type JitO (Target r s t) = JitO (r s t)
+  jitOut (Target _ t) = jitOut t

@@ -172,34 +172,34 @@ test32input = unsafeConcat 0 g b
 
 main :: IO ()
 main = do 
-  traceDebug test1
-  traceDebug test2
-  traceDebug test3
-  -- traceDebug test5
-  -- traceDebug test6
-  traceDebug test5
-  traceDebug test6
-  traceDebug test7
-  traceDebug test8
-  traceDebug test9
-  traceDebug test10
-  traceDebug test11
+  -- --traceDebug test1
+  -- --traceDebug test2
+  -- --traceDebug test3
+  -- --traceDebug test5
+  -- --traceDebug test6
+  -- --traceDebug test5
+  -- --traceDebug test6
+  -- --traceDebug test7
+  -- --traceDebug test8
+  -- --traceDebug test9
+  -- --traceDebug test10
+  -- --traceDebug test11
 
-  traceDebug test12
-  traceDebug test13
+  --traceDebug test12
+  --traceDebug test13
 
-  traceDebug test14
+  --traceDebug test14
 
 
-  traceDebugGrad test15
-  traceDebugGrad test16
-  traceDebugGrad test17
+  --traceDebugGrad test15
+  --traceDebugGrad test16
+  --traceDebugGrad test17
 
-  traceDebugGrad test18
-  traceDebugGrad test19
+  --traceDebugGrad test18
+  --traceDebugGrad test19
 
-  traceDebug     test4
-  traceDebugGrad test20
+  --traceDebug     test4
+  --traceDebugGrad test20
 
   let a :: Tensor '[4, 5] Float = 
         [[ 1, 2, 3, 4, 5], 
@@ -223,22 +223,22 @@ main = do
 
   print ([fromRational i + fromRational j | i <- [0.0..6.0], j <- [-5.0..9.0]] :: [Tensor '[12] Float])
 
-  traceDebug test21
-  traceDebugGrad test21
-  traceDebug test22
-  traceDebugGrad test22
+  --traceDebug test21
+  --traceDebugGrad test21
+  --traceDebug test22
+  --traceDebugGrad test22
 
-  traceDebug test23
+  --traceDebug test23
 
-  traceDebug test24
-  traceDebugGrad test24
+  --traceDebug test24
+  --traceDebugGrad test24
 
   print ([[True, False], [False, True]] :: Tensor '[2, 2] Bool)
   let t24 = jit test24
   print $ t24 [[0, 4, 2, 5], [1, -3, -4, -5]] [[0, -1, -5, -3], [4, 2, 5, 6]] (splat False)
 
-  traceDebug test25
-  traceDebug test26
+  --traceDebug test25
+  --traceDebug test26
 
 
 
@@ -266,4 +266,5 @@ main = do
 
 
   clientDestroy client
+  echoNumCompilations
   return ()

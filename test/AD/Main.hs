@@ -11,7 +11,7 @@ import HAX.Jit
 
 import Data.Int
 import GHC.TypeLits
-import HAX.AD (traceDebugGrad)
+-- import HAX.AD (traceDebugGrad)
 
 
 type R = Target (Reverse Tracer)
@@ -91,23 +91,31 @@ test14 input = vmap (\start ->
 
 main :: IO ()
 main = do
+  -- test 1
   let t1a = jit $ rgrad test1
       t1b = ngrad $ jit test1
   print $ t1a [[2, 1, 4, 3], [4, 2, 1, 6]] [[2, -8, 7, -5], [0, -4, 8, 0]] [[5, 5, 2, 7, 1], [3, 5, 6, 2, 1]] - 
           t1b [[2, 1, 4, 3], [4, 2, 1, 6]] [[2, -8, 7, -5], [0, -4, 8, 0]] [[5, 5, 2, 7, 1], [3, 5, 6, 2, 1]]
+  -- test 2
   let t2a = jit $ rgrad test2
       t2b = ngrad $ jit test2
   print $ t2a (splat True) [[2, -1, -4, 5], [5, -2, -5, 2]] [[0, 0, 0, 0], [5, 2, -1, -5]]
   print $ t2b (splat True) [[2, -1, -4, 5], [5, -2, -5, 2]] [[0, 0, 0, 0], [5, 2, -1, -5]]
+
+  -- test 3
   let t3a = jit $ rgrad test3 
   print $ t3a [[2, 4], [-1, 6]] [[True, False], [False, True]]
+
+  -- test 4
   let t4a = jit $ rgrad test4
   print $ t4a [[2, 1], [5, 2], [-4, 1], [-5, -6]] [False, True, False, True]
 
+  -- test 5
   putStrLn $ replicate 16 '='
   print $ (jit test5 :: Tensor [5, 5] Float -> Tensor '[5] Float) [[0, 1, 2, 3, 4], [1, 0, 1, 2, 3], [2, 1, 0, 1, 2], [3, 2, 1, 0, 1], [4, 3, 2, 1, 0]]
   print $ (jit . rgrad $ reduceAdd' . test5) [[0, 1, 2, 3, 4], [1, 0, 1, 2, 3], [2, 1, 0, 1, 2], [3, 2, 1, 0, 1], [4, 3, 2, 1, 0]]
 
+  -- test6
   print $ jit test6 [[[0, 1], [3, 1], [4, 5]], 
                      [[-1,3], [4, 1], [0, 0]], 
                      [[3, 1], [-6,4], [3, 0]], 
@@ -124,13 +132,14 @@ main = do
                                               [[3, 1], [-6,4], [3, 0]], 
                                               [[0,-3], [4,-1], [3, 3]],
                                               [[0, 0], [9, 9], [4, 4]]]
+  -- test 7
   putStrLn $ replicate 16 '='
   print $ jit test7 [0, 1, 2, 3, 4]
   print $ (jit . rgrad $ reduceAdd' . test7) [0, 1, 2, 3, 4]
   print $ (ngrad . jit $ reduceAdd' . test7) [0, 1, 2, 3, 4]
-
+  
   print $ jit (unsafeDiagonal 0 1 :: Tracer [3, 3] Float -> Tracer '[3] Float) ([[3, 4, 1], [6, 3, 1], [2, 9, 3]] :: Tensor [3, 3] Float)
-
+  
   print $ jit test8 [[[0, 1], 
                       [4, 0]], 
                      [[6, 4],
@@ -141,18 +150,20 @@ main = do
                       [0, 0]],
                      [[9, 9],
                       [0, 0]]]
-
---  print (jit $ test9 test10 :: Tensor [10, 2] Int64)
-
+  
+  
   putStrLn $ replicate 16 '='
   print (jit test11 $ jit test11input)
   print (jit test12 $ jit test11input)
   print (jit test13 $ jit test11input)
   print (jit test14 $ jit test10)
-
+  -- 
   putStrLn $ replicate 16 '='
-
+  -- 
   -- traceDebugGrad test11
   let a = (jit . rgrad) test11 $ jit test11input
-      b = (ngrad . jit) (reduceAdd' . test11) $ jit test11input
-  print (a - b)
+  let b = (ngrad . jit) (reduceAdd' . test11) $ jit test11input
+  -- traceDebug ((`unsafeReduceAdd` [0, 1, 2, 3]) :: Tracer '[2, 4, 5, 2] Float -> Tracer '[] Float)
+  print $ l2Loss (a - b)
+
+  echoNumCompilations 

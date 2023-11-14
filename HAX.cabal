@@ -203,3 +203,12 @@ test-suite HAX-MNIST-test
                       HAX,
 
   
+test-suite HAX-compilation-test
+    import:           warnings 
+    default-language: GHC2021
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test/compilation
+    main-is:          Main.hs 
+    build-depends:    base,
+                      HAX,
+
