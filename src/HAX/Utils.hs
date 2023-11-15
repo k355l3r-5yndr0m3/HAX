@@ -5,7 +5,7 @@ import GHC.TypeLits
 
 newtype Annotated a b = Annotated a
 data a <&> b = a :&: b deriving Show
-infixr 8 :&:, <&>
+infixl 8 :&:, <&>
 instance (Num a, Num b) => Num (a <&> b) where
   alhs :&: blhs + arhs :&: brhs = 
     (alhs + arhs) :&: (blhs + brhs)
@@ -27,3 +27,5 @@ instance (Fractional a, Fractional b) => Fractional (a <&> b) where
     (alhs / arhs) :&: (blhs / brhs)
   recip (lhs :&: rhs) = recip lhs :&: recip rhs
   fromRational r = fromRational r :&: fromRational r
+
+

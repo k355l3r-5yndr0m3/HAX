@@ -7,6 +7,7 @@ import Type.Reflection
 import Foreign.C
 
 -- TODO: Optimize
+newtype PartialGradientID = PartialGradientID CIntPtr
 newtype Gradient = Gradient [(CIntPtr, Dynamic)]
 type G r s t = r s t -> Gradient
 
@@ -19,8 +20,6 @@ zero = Gradient []
 nograd :: a -> Gradient 
 nograd = const zero
 
-independent :: Typeable t => CIntPtr -> t -> Gradient
-independent idx val = Gradient [(idx, toDyn val)]
 
 type Cotangent t = (Typeable t, Num t)
 

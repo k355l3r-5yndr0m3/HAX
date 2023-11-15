@@ -31,12 +31,14 @@ import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
 import Control.Exception (assert)
 import Data.Maybe (fromJust)
+import Foreign.C (CIntPtr)
+import Data.Dynamic (toDyn, Typeable, Dynamic, fromDyn)
 
--- TODO: Remove Traceable
+-- TODO: Remove Typeable
 
 -- Shape
 type Shape = [Nat]
-class KnownShape (s :: Shape) where
+class Typeable s => KnownShape (s :: Shape) where
   shapeVal :: Proxy s -> [Integer]
   shapeRank :: Proxy s -> Integer
   shapeValHead :: Proxy s -> Integer
@@ -181,7 +183,7 @@ shapeOf :: forall r s t. KnownShape s => r s t -> [Integer]
 shapeOf _ = shapeVal (Proxy :: Proxy s)
 
 -- Tensorial
-class (Prim (StorageType t), Storable (StorageType t), TypeGet (SHLOType t)) => Tensorial t where
+class (Prim (StorageType t), Storable (StorageType t), TypeGet (SHLOType t), Typeable t) => Tensorial t where
   type SHLOType t
   type StorageType t = r | r -> t
 
@@ -200,6 +202,15 @@ class (Prim (StorageType t), Storable (StorageType t), TypeGet (SHLOType t)) => 
   toHaskell   :: StorageType t -> t
   literalPad  :: t
   comparisonType :: Proxy t -> ComparisonTypeAttr
+  
+  independent :: (TensorOp r, T s t) => CIntPtr -> r s t -> Gradient
+  default independent :: (KnownShape s, Typeable r, Fractional t) => CIntPtr -> r s t -> Gradient
+  independent idx val = Gradient [(idx, toDyn val)]
+
+  gradientSum :: (TensorOp r, T s t) => [Dynamic] -> r s t
+  default gradientSum :: (TensorOp r, T s t, Fractional t) => [Dynamic] -> r s t
+  gradientSum [] = splat 0 
+  gradientSum gs = foldl1 unsafePairwiseAdd [fromDyn i $ error "Gradient ID scrambled!" | i <- gs]
 
   -- For gradient
   -- TODO: Remove unneeded gradient function (ie those that does not needed additional constraint)
@@ -425,6 +436,9 @@ instance Tensorial Word8 where
   branchGrad _ _ _ = nograd
   selectGrad _ _ _ = nograd
 
+  independent _ = nograd
+  gradientSum _ = splat 0
+
 instance Tensorial Int64 where
   type SHLOType Int64 = IntegerType
   type StorageType Int64 = Int64
@@ -454,6 +468,10 @@ instance Tensorial Int64 where
 
   branchGrad _ _ _ = nograd
   selectGrad _ _ _ = nograd
+
+  independent _ = nograd
+  gradientSum _ = splat 0
+
 
 newtype Pred = Pred Word8 deriving (Num, Eq, Prim, Storable)
 instance Show Pred where 
@@ -489,6 +507,9 @@ instance Tensorial Bool where
 
   branchGrad _ _ _ = nograd
   selectGrad _ _ _ = nograd
+
+  independent _ = nograd
+  gradientSum _ = splat False
 
 type family ListItem a where
   ListItem [a] = a
@@ -540,7 +561,7 @@ type T s t = (KnownShape s, Tensorial t)
 --     rhs (kernel)                        is [IN FEAT DIM,  ...(SPATIAL DIM)..., OUT FEAT DIM]
 --     output                              is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
 -- This is to simplify implementation
-class TensorOp (r :: Shape -> Type -> Type) where
+class Typeable r => TensorOp (r :: Shape -> Type -> Type) where
   -- without type checking, internal use only
   unsafeBroadcast    :: (T s0 t, T s1 t) => r s0 t -> [Integer] -> r s1 t
   unsafeTranspose    :: (T s0 t, T s1 t) => r s0 t -> [Integer] -> r s1 t

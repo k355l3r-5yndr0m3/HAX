@@ -27,6 +27,8 @@ import GHC.TypeLits
 import Data.Int (Int64)
 import GHC.IsList
 
+import HAX.Tensor.Tracer
+
 -- Target: represent the target of vmap transformation
 --         Target dims r 
 --         dims ++ shapeVal r is the true shape
@@ -626,19 +628,19 @@ vmap f = vmap' [] (const f)
 --     deconstructTracer t
 --   deconstructTracer _ = error "deconstructTracer received an invalid target."
 
-instance Reversable (Reverse r s t) => Reversable (Target (Reverse r) s t) where
-  type ReversedType (Target (Reverse r) s t) = ReversedType (Reverse r s t)
-  constructReverse i t = (i', Target [] r)
-    where (i', r) = constructReverse i t
-  gradReify _ = gradReify (Proxy :: Proxy (Reverse r s t))
-
-instance (Reversable j, Num (r s t)) => ReverseMode (j -> Target (Reverse r) s t) where
-  type Rev g (j -> Target (Reverse r) s t)      = ReversedType j -> g
-  type GradResult (j -> Target (Reverse r) s t) = ReversedType j
-
-  rgrad' (reifier, i) f t = assert (null dims) reifier $ cotangent r 1
-    where Target dims r = f $ snd $ constructReverse i t
-  rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i  -> (_, g, Gradient g')) = assert (null g') g
+-- instance Reversable (Reverse r s t) => Reversable (Target (Reverse r) s t) where
+--   type ReversedType (Target (Reverse r) s t) = ReversedType (Reverse r s t)
+--   constructReverse i t = (i', Target [] r)
+--     where (i', r) = constructReverse i t
+--   gradReify _ = gradReify (Proxy :: Proxy (Reverse r s t))
+-- 
+-- instance (Reversable j, Num (r s t)) => ReverseMode (j -> Target (Reverse r) s t) where
+--   type Rev g (j -> Target (Reverse r) s t)      = ReversedType j -> g
+--   type GradResult (j -> Target (Reverse r) s t) = ReversedType j
+-- 
+--   rgrad' (reifier, i) f t = assert (null dims) reifier $ cotangent r 1
+--     where Target dims r = f $ snd $ constructReverse i t
+--   rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i  -> (_, g, Gradient g')) = assert (null g') g
 
 -- type instance JitTransform (Target r s t) = Tensor s t
 instance JitIn (r s t) => JitIn (Target r s t) where
@@ -649,3 +651,18 @@ instance JitIn (r s t) => JitIn (Target r s t) where
 instance JitOut (r s t) => JitOut (Target r s t) where
   type JitO (Target r s t) = JitO (r s t)
   jitOut (Target _ t) = jitOut t
+
+instance GradIn (r s t) => GradIn (Target r s t) where
+  type GradI (Target r s t) = GradI (r s t)
+  gradIn i t = (Target [] t', i', r)
+    where (t', i', r) = gradIn i t
+
+instance (GradIn a, TensorOp r, Tensorial t, Fractional t) => Grad (a -> Target (Reverse r) '[] t) where
+  type GradF' (a -> Target (Reverse r) '[] t) g = GradI a -> g <&> GradI a
+  type GradF  (a -> Target (Reverse r) '[] t)   = GradI a -> GradI a
+  grad' i recover f = grad' i recover f'
+    where f' t' = let Target _ g = f t'
+                  in  g
+  grad f t = fst $ recover $ g $ splat 0
+    where (t', _, recover) = gradIn 0 t
+          Target _ (R _ g) = f t'
