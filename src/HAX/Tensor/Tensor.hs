@@ -29,6 +29,7 @@ import GHC.TypeError
 import GHC.IsList
 import GHC.Generics
 import Data.Kind (Type)
+import Data.Bifunctor (Bifunctor(first))
 
 
 newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
@@ -252,6 +253,7 @@ instance (JitIn a, Jit b) => Jit (a -> b) where
 -- Jit Nested Transformation
 instance TypeError (Text "cannot jit this function") => JNT Tensor where
   fromTracer = undefined
+  toTracer   = undefined
 
 class GJitIn t where
   type GJitI t :: k -> Type
@@ -328,13 +330,62 @@ instance (JitIn a, JitIn b) => JitIn (a <&> b) where
     where (i' , a', a'') = jitIn i  a
           (i'', b', b'') = jitIn i' b
 
-instance T s t => JitIn (Tracer s t) where
-  type JitI (Tracer s t) = Tensor s t
-  jitIn i (Tensor buffer) = (i + 1, Tracer $ \t -> (t, ) <$> blockArg i, [(buffer, tensorType' (Proxy :: Proxy (Tracer s t)))])
+instance (JNT r, T s t) => JitIn (r s t) where
+  type JitI (r s t) = Tensor s t
+  jitIn i (Tensor buffer) = (i + 1, fromTracer . Tracer $ \t -> (t, ) <$> blockArg i, [(buffer, tensorType' (Proxy :: Proxy (Tracer s t)))])
+
+class GJitOut f where
+  type GJitO f :: k -> Type
+  gJitOut :: f x -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (GJitO f x, [Buffer]))
+instance GJitOut V1 where
+  type GJitO V1 = V1
+  gJitOut a = (pure . (,[]), [], (a,))
+instance GJitOut U1 where
+  type GJitO U1 = U1
+  gJitOut a = (pure . (,[]), [], (a,))
+instance (GJitOut f, GJitOut g) => GJitOut (f :+: g) where
+  type GJitO (f :+: g) = GJitO f :+: GJitO g
+  gJitOut (L1 f) = (t, t', first L1 . t'')
+    where (t, t', t'') = gJitOut f
+  gJitOut (R1 g) = (t, t', first R1 . t'')
+    where (t, t', t'') = gJitOut g
+instance (GJitOut f, GJitOut g) => GJitOut (f :*: g) where
+  type GJitO (f :*: g) = GJitO f :*: GJitO g
+  gJitOut (a :*: b) = (\tbl -> do 
+    (tbl' , a') <- ac tbl 
+    (tbl'', b') <- bc tbl' 
+    return (tbl'', a' ++ b'), 
+    at ++ bt, 
+    \bs -> 
+      let (a', bs')  = ar bs
+          (b', bs'') = br bs'
+      in  (a' :*: b', bs''))
+    where (ac, at, ar) = gJitOut a
+          (bc, bt, br) = gJitOut b
+instance JitOut t => GJitOut (K1 i t) where
+  type GJitO (K1 i t) = K1 i (JitO t)
+  gJitOut (K1 t) = (i, i', first K1 . i'')
+    where (i, i', i'') = jitOut t
+instance GJitOut f => GJitOut (M1 i t f) where
+  type GJitO (M1 i t f) = M1 i t (GJitO f)
+  gJitOut (M1 f) = (i, i', first M1 . i'')
+    where (i, i', i'') = gJitOut f
+
+
 
 class JitOut t where
   type JitO t
   jitOut :: t -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (JitO t, [Buffer]))
+  default jitOut :: (Generic t, Generic (JitO t), GJitOut (Rep t), Rep (JitO t) ~ GJitO (Rep t)) => t -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (JitO t, [Buffer]))
+  jitOut (from -> t) = (i, i', first to . i'')
+    where (i, i', i'') = gJitOut t
+instance JitOut Rational where
+  type JitO Rational = Rational
+  jitOut i = (pure . (,[]), [], (i,))
+instance JitOut Integer where
+  type JitO Integer = Integer
+  jitOut i = (pure . (,[]), [], (i,))
+
 instance JitOut a => JitOut [a] where
   type JitO [a] = [JitO a]
   jitOut []     = (pure . (, []), [], ([], ))
@@ -373,9 +424,9 @@ instance (JitOut a, JitOut b) => JitOut (a <&> b) where
       in  (a' :&: b', bs''))
     where (ac, at, ar) = jitOut a
           (bc, bt, br) = jitOut b
-instance T s t => JitOut (Tracer s t) where
-  type JitO (Tracer s t) = Tensor s t
-  jitOut (Tracer t) = (\tbl -> do 
+instance (JNT r, T s t) => JitOut (r s t) where
+  type JitO (r s t) = Tensor s t
+  jitOut (toTracer -> Tracer t) = (\tbl -> do 
     fmap (:[]) <$> t tbl, [tensorType' (Proxy :: Proxy (Tracer s t))], \case 
       []   -> error "Not enough output"
       a:as -> (Tensor a, as))

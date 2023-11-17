@@ -611,15 +611,6 @@ instance (T s t, TensorOp r, Transformable r, Vectorizable f) => Vectorizable (T
 vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b) 
 vmap f = vmap' [] (const f)
 
-instance JitIn (r s t) => JitIn (Target r s t) where
-  type JitI (Target r s t) = JitI (r s t)
-  jitIn i t = (i', Target [] t', bs)
-    where (i', t', bs) = jitIn i t
-
-instance JitOut (r s t) => JitOut (Target r s t) where
-  type JitO (Target r s t) = JitO (r s t)
-  jitOut (Target _ t) = jitOut t
-
 instance GradIn (r s t) => GradIn (Target r s t) where
   type GradI (Target r s t) = GradI (r s t)
   gradIn i t = (Target [] t', i', r)
@@ -633,3 +624,4 @@ instance (TensorOp r, T s t, Fractional t) => Grad (Target (Reverse r) s t) wher
 
 instance JNT r => JNT (Target r) where
   fromTracer = Target [] . fromTracer
+  toTracer (Target _ i) = toTracer i

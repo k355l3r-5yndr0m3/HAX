@@ -123,78 +123,6 @@ instance TensorOp r => TensorOp (Reverse r) where
 
 
 
-
-instance JitIn (r s t) => JitIn (Reverse r s t) where 
-  type JitI (Reverse r s t) = JitI (r s t) -- Should just evaluate to Tensor s t 
-  jitIn i t = (i', R t' undefined, bs)
-    where (i', t', bs) = jitIn i t
-
-instance JitOut (r s t) => JitOut (Reverse r s t) where
-  type JitO (Reverse r s t) = JitO (r s t)
-  jitOut = jitOut . primal
-
--- Reversable
--- class Reversable r where
---   type ReversedType r
---   constructReverse :: CIntPtr -> ReversedType r -> (CIntPtr, r)
---   gradReify :: Proxy r -> CIntPtr -> Gradient -> (CIntPtr, ReversedType r, Gradient)
--- 
--- instance (TensorOp r, KnownShape s) => Reversable (Reverse r s Bool) where
---   type ReversedType (Reverse r s Bool) = r s Bool
---   constructReverse i t = (i + 1, Reverse (t, nograd))
---   gradReify _ i (Gradient gs) = (i + 1, splat False, g')
---     where (_, Gradient -> g') = partition ((i ==) . fst) gs
--- 
--- instance (TensorOp r, KnownShape s) => Reversable (Reverse r s Int64) where
---   type ReversedType (Reverse r s Int64) = r s Int64
---   constructReverse i t = (i + 1, Reverse (t, nograd))
---   gradReify _ i (Gradient gs) = (i + 1, splat 0, g')
---     where (_, Gradient -> g') = partition ((i ==) . fst) gs
--- 
--- instance (TensorOp r, KnownShape s) => Reversable (Reverse r s Word8) where
---   type ReversedType (Reverse r s Word8) = r s Word8
---   constructReverse i t = (i + 1, Reverse (t, nograd))
---   gradReify _ i (Gradient gs) = (i + 1, splat 0, g')
---     where (_, Gradient -> g') = partition ((i ==) . fst) gs
--- 
--- instance Cotangent (r s Float) => Reversable (Reverse r s Float) where
---   type ReversedType (Reverse r s Float) = r s Float
---   constructReverse i t = (i + 1, Reverse (t, independent i))
---   gradReify _ i (Gradient gs) = (i + 1, sum (fromDyn' <$> g), g')
---     where (fmap snd -> g, Gradient -> g') = partition ((i ==) . fst) gs
--- 
--- instance (Reversable a, Reversable b) => Reversable (a <&> b) where
---   type ReversedType (a <&> b) = ReversedType a <&> ReversedType b
---   constructReverse i0 (a :&: b) = (i2, a' :&: b')
---     where (i1, a') = constructReverse i0 a
---           (i2, b') = constructReverse i1 b
---   gradReify _ i0 g0 = (i2, a' :&: b', g2)
---     where (i1, a', g1) = gradReify (Proxy :: Proxy a) i0 g0
---           (i2, b', g2) = gradReify (Proxy :: Proxy b) i1 g1
-
--- TODO: Implement General
--- class ReverseMode f where
---   type Rev g f
---   type GradResult f
---   rgrad' :: (Gradient -> g, CIntPtr) -> f -> Rev g f
---   rgradReify :: Annotated CIntPtr f -> Gradient -> GradResult f
--- 
--- instance (Reversable j, Num (r s t)) => ReverseMode (j -> Reverse r s t) where
---   type Rev g (j -> Reverse r s t)      = ReversedType j -> g
---   type GradResult (j -> Reverse r s t) = ReversedType j
---   rgrad' (reifier, i) f t = reifier $ cotangent (f $ snd $ constructReverse i t) 1
---   rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i  -> (_, g, Gradient g')) = assert (null g') g
--- 
--- instance (Reversable j, ReverseMode (a -> b)) => ReverseMode (j -> (a -> b)) where
---   type Rev g (j -> (a -> b))      = ReversedType j -> Rev g (a -> b)
---   type GradResult (j -> (a -> b)) = ReversedType j <&> GradResult (a -> b)
---   rgrad' (reifier, i) f t = rgrad' (reifier, i') (f r)
---     where (i', r) = constructReverse i t
---   rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i -> (i', g, g')) = g :&: rgradReify (Annotated i' :: Annotated CIntPtr (a -> b)) g'
--- 
--- type RGrad f = Rev (GradResult f) f
-
--- rgrad :: forall f. ReverseMode f => f -> RGrad f
 rgrad :: Grad f => f -> GradF f
 rgrad = grad 
 
@@ -226,20 +154,6 @@ class Grad f where
   type GradF  f
   grad' :: CIntPtr -> (Gradient -> (g, Gradient)) -> f -> GradF' f g
   grad  :: f -> GradF f
-
--- instance (GradIn a, TensorOp r, T s t, Fractional t) => Grad (a -> Reverse r s t) where
---   type GradF' (a -> Reverse r s t) g = GradI a -> g <&> GradI a
---   type GradF  (a -> Reverse r s t)   = GradI a -> GradI a
---   grad' i recover f t = fst $ recover' (n $ splat 1)
---     where recover' g = 
---             let (a,  g' ) = recover g
---                 (as, g'') = rec g'
---             in  (a :&: as, g'')
---           (t', _, rec) = gradIn i t
---           R _ n = f t'
---   grad f t = fst $ recover $ g $ splat 0
---     where (t', _, recover) = gradIn 0 t
---           R _ g            = f t'
 
 instance (TensorOp r, T s t, Fractional t) => Grad (Reverse r s t) where
   type GradF' (Reverse r s t) g = g
@@ -301,3 +215,4 @@ instance (GradIn a, GradIn b) => GradIn (a <&> b) where
 
 instance JNT r => JNT (Reverse r) where
   fromTracer = Reverse . (, undefined) . fromTracer
+  toTracer = toTracer . primal 
