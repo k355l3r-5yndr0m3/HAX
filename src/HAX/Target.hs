@@ -4,8 +4,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
 module HAX.Target where
-import HAX.Tensor.Tensorial
-import HAX.Tensor.Tensor
+import HAX.Tensor
 
 import HAX.AD.Reverse
 
@@ -632,3 +631,5 @@ instance (TensorOp r, T s t, Fractional t) => Grad (Target (Reverse r) s t) wher
   grad' _ recover (Target _ (R _ g)) = fst . recover . g . splat $ 1
   grad = undefined
 
+instance JNT r => JNT (Target r) where
+  fromTracer = Target [] . fromTracer

@@ -5,12 +5,10 @@
 {-# LANGUAGE UndecidableInstances #-}
 module HAX.AD.Reverse where
 import Prelude hiding (reverse)
-import HAX.Tensor.Tensorial
-import HAX.Tensor.Tensor
+import HAX.Tensor
 
 import HAX.AD.Gradient
 import HAX.Utils
-
 
 import Data.Proxy
 import Data.List hiding (reverse)
@@ -301,6 +299,5 @@ instance (GradIn a, GradIn b) => GradIn (a <&> b) where
     where (a', i' , ag) = gradIn i  a
           (b', i'', bg) = gradIn i' b
 
-
-
-
+instance JNT r => JNT (Reverse r) where
+  fromTracer = Reverse . (, undefined) . fromTracer

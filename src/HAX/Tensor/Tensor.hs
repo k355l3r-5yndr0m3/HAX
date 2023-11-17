@@ -249,6 +249,10 @@ instance (JitIn a, Jit b) => Jit (a -> b) where
           f'          = f t
           args'       = args ++ a'
 
+-- Jit Nested Transformation
+instance TypeError (Text "cannot jit this function") => JNT Tensor where
+  fromTracer = undefined
+
 class GJitIn t where
   type GJitI t :: k -> Type
   gJitIn :: CIntPtr -> GJitI t x -> (CIntPtr, t x, [(Buffer, AnyType)])

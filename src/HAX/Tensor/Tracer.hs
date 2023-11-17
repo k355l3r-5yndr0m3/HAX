@@ -482,40 +482,7 @@ instance (Floating t, T s t) => Floating (Tracer s t) where
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+class JNT (r :: Z) where
+  fromTracer :: T s t => Tracer s t -> r s t
+instance JNT Tracer where
+  fromTracer = id
