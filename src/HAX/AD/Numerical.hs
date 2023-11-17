@@ -2,6 +2,8 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE LambdaCase #-}
 module HAX.AD.Numerical where -- This module is intended only for debugging of differentiating algorithms
 
 import HAX.Tensor.Tensorial
@@ -9,71 +11,102 @@ import HAX.Tensor.Tensor
 import HAX.PjRt
 import HAX.Utils
 
-import Data.Proxy
 import Data.Primitive hiding (newArray)
 import Foreign
 
 import GHC.IO.Unsafe
+import GHC.TypeError
+
+import Control.Exception (assert)
 
 delta :: Fractional t => t
 delta = 0.004918684734
 
-class Tensorial t => Neighborhood t where
-  neighborhood' :: KnownShape s => StorageType t -> Tensor s t -> [Tensor s t]
-  neighborhood  :: KnownShape s => Tensor s t -> [Tensor s t]
-  
-  realGradToTensor :: (Real t', KnownShape s) => [t'] -> Tensor s t
+class NGrad f where
+  type NGradF' f g
+  type NGradF  f
 
-instance {-# OVERLAPPABLE #-} (Tensorial t, Fractional (StorageType t)) => Neighborhood t where
-  neighborhood' :: forall s. KnownShape s => StorageType t -> Tensor s t -> [Tensor s t]
-  neighborhood' _delta (tensorToPrimArray -> tensor) = [unsafePerformIO $ do 
-    buffer <- mallocArray nelem
-    copyPrimArrayToPtr buffer tensor 0 nelem
-    pokeElemOff buffer i (_delta + indexPrimArray tensor i)
-    tensorFromHostBufferGC defaultDevice buffer | i <- [0..nelem - 1]]
-    where nelem = fromInteger $ product $ shapeVal (Proxy :: Proxy s)
-  neighborhood = neighborhood' delta
+  ngrad' :: ([[Float]] -> (g, [[Float]])) -> (f, [[f]]) -> NGradF' f g
+  ngrad  :: f -> NGradF f
 
-  realGradToTensor g = unsafePerformIO $ tensorFromHostBufferGC defaultDevice =<< newArray (realToFrac <$> g)
-instance Neighborhood Word8 where
-  neighborhood' _ _ = []
-  neighborhood  _   = []
+instance (T s t, Real t) => NGrad (Tensor s t) where
+  type NGradF' _ g = g
+  type NGradF  _   = TypeError (Text "ngrad must be applied to a function")
 
-  realGradToTensor _ = 0
-instance Neighborhood Bool where
-  neighborhood' _ _ = []
-  neighborhood  _   = []
+  ngrad' recover (reduceAdd' -> y, fmap (fmap reduceAdd') -> ys) = assert (null l) g
+    where gradients = [[(/delta) . realToFrac . getScalar $ (y' - y) | y' <- ys'] | ys' <- ys]
+          (g, l) = recover gradients
 
-  realGradToTensor _ = splat False
+  ngrad = undefined
 
-class NumericalMethod f where
-  type NGradFunc g f
-  type NGradReif f
-  ngrad' :: ([[Double]] -> g) -> [[f]] -> f -> NGradFunc g f
-  nreif  :: Annotated [[Double]] f -> NGradReif f
+instance (NGradIn t, NGrad f) => NGrad (t -> f) where
+  type NGradF' (t -> f) g = t -> NGradF' f (g <&> t)
+  type NGradF  (t -> f)   = t -> NGradF' f t
 
-instance (T s t, T '[] t', Neighborhood t, Real t') => NumericalMethod (Tensor s t -> Tensor '[] t') where
-  type NGradFunc g (Tensor s t -> Tensor '[] t') = Tensor s t -> g
-  type NGradReif (Tensor s t -> Tensor '[] t') = Tensor s t
-  ngrad' reifier fs f n = reifier grad
-    where ns   = neighborhood n
-          fs'  = fmap (<*> [n]) fs ++ [fmap f ns]
-          f'   = f n
-          grad = fmap (fmap (\x -> realToFrac (getScalar (x - f')) / delta)) fs'
-  nreif (Annotated [grad]) = realGradToTensor grad
-  nreif _                  = error "Not enough or too many results generated"
+  ngrad' recover ffs t = ngrad' recover' ffs'
+    where (ffs', rec) = ngradIn t ffs
+          recover' g = let (t', c ) = rec g
+                           (g', c') = recover c
+                       in  (g' :&: t', c')
+  ngrad f t = ngrad' recover (f', fs')
+    where ((f', init -> fs'), recover) = ngradIn t (f, [[f]]) 
 
+class NGradIn t where
+  -- NOTE: The order of [(CIntPtr, [t -> a])] (or [(CIntPtr, [a])]) is in the opposite to the order of the arguments
+  --       i.e the first element is corrilated to the last tensor, the second is the second to last tensor, ..., and the last element is corrilated to the first tensor 
+  --       This behavour might make it unnessisary to tag each element with an id, since their order is known
+  ngradIn :: t -> (t -> a, [[t -> a]]) -> ((a, [[a]]), [[Float]] -> (t, [[Float]]))
+  default ngradIn :: (T s u, Fractional (StorageType u), t ~ Tensor s u) => t -> (t -> a, [[t -> a]]) -> ((a, [[a]]), [[Float]] -> (t, [[Float]]))
+  ngradIn t@(tensorToPrimArray -> x) (f, fs) = ((f t, (f <$> xs):[g <*> [t] | g <- fs]) , \case 
+    []   -> error "Not enough output has been produced!"
+    a:as -> (unsafePerformIO $ do 
+      buffer <- mallocArray sz
+      pokeArray buffer [realToFrac i | i <- a]
+      tensorFromHostBufferGC defaultDevice buffer, as))
+    where dx = delta
+          xs = [unsafePerformIO $ do 
+            buffer <- mallocArray sz
+            copyPrimArrayToPtr buffer x 0 sz
+            pokeElemOff buffer i $ dx + indexPrimArray x i
+            tensorFromHostBufferGC defaultDevice buffer| i <- [0..sz - 1]]
+          sz = sizeofPrimArray x
 
-instance (T s t, Neighborhood t, NumericalMethod (a -> b)) => NumericalMethod (Tensor s t -> a -> b) where
-  type NGradFunc g (Tensor s t -> a -> b) = Tensor s t -> NGradFunc g (a -> b)
-  type NGradReif (Tensor s t -> a -> b) = Tensor s t <&> NGradReif (a -> b)
-  ngrad' reifier fs f n = ngrad' reifier fs' f'
-    where ns   = neighborhood n
-          fs'  = fmap (<*> [n]) fs ++ [fmap f ns]
-          f'   = f n
-  nreif (Annotated (grad:gs)) = realGradToTensor grad :&: nreif (Annotated gs :: Annotated [[Double]] (a -> b))
-  nreif _                     = error "Not enough value"
+instance NGradIn t => NGradIn [t] where
+  ngradIn []     (f, fs) = ((f [], [g <*> [[]] | g <- fs]), ([], ))
+  ngradIn (t:ts) (f, fs) = (s', \g -> 
+    let (ts', g') = c' g
+        (t', g'') = c g'
+    in  (t':ts', g''))
+    where modf b a as = b (a:as)
+          f'  = modf f
+          fs' = [[modf j | j <- i] | i <- fs]
+          (s , c ) = ngradIn t  (f', fs')
+          (s', c') = ngradIn ts s
 
-ngrad :: forall f. NumericalMethod f => f -> NGradFunc (NGradReif f) f
-ngrad = ngrad' reifier []
-  where reifier grad = nreif (Annotated grad :: Annotated [[Double]] f)
+instance (NGradIn a, NGradIn b) => NGradIn (a, b) where
+  ngradIn (a, b) (curry -> f, fmap (fmap curry) -> fs) = (s', \g -> 
+    let (b', g')  = c' g
+        (a', g'') = c g'
+    in  ((a', b'), g''))
+    where (s , c ) = ngradIn a (f, fs)
+          (s', c') = ngradIn b s
+
+instance (NGradIn a, NGradIn b) => NGradIn (a <&> b) where
+  ngradIn (a :&: b) (f, fs) = (s', \g -> 
+    let (b', g')  = c' g
+        (a', g'') = c g'
+    in  (a' :&: b', g''))
+    where modf g x y = g (x :&: y)
+          f'  = modf f
+          fs' = [[modf j | j <- i] | i <- fs]
+          (s , c ) = ngradIn a (f', fs')
+          (s', c') = ngradIn b s 
+
+instance KnownShape s => NGradIn (Tensor s Float)
+
+instance KnownShape s => NGradIn (Tensor s Int64) where
+  ngradIn t (f, fs) = ((f t, fmap (<*> [t]) fs), (splat 0, ))
+instance KnownShape s => NGradIn (Tensor s Word8) where
+  ngradIn t (f, fs) = ((f t, fmap (<*> [t]) fs), (splat 0, ))
+instance KnownShape s => NGradIn (Tensor s Bool) where
+  ngradIn t (f, fs) = ((f t, fmap (<*> [t]) fs), (splat False, ))

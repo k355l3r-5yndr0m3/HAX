@@ -94,7 +94,8 @@ main = do
   -- test 1
   let t1a = jit $ rgrad test1
       t1b = ngrad $ jit test1
-  print $ t1a [[2, 1, 4, 3], [4, 2, 1, 6]] [[2, -8, 7, -5], [0, -4, 8, 0]] [[5, 5, 2, 7, 1], [3, 5, 6, 2, 1]] - 
+    
+  print $ t1a [[2, 1, 4, 3], [4, 2, 1, 6]] [[2, -8, 7, -5], [0, -4, 8, 0]] [[5, 5, 2, 7, 1], [3, 5, 6, 2, 1]] -
           t1b [[2, 1, 4, 3], [4, 2, 1, 6]] [[2, -8, 7, -5], [0, -4, 8, 0]] [[5, 5, 2, 7, 1], [3, 5, 6, 2, 1]]
   -- test 2
   let t2a = jit $ rgrad test2
@@ -162,7 +163,7 @@ main = do
   -- 
   -- traceDebugGrad test11
   let a = (jit . rgrad) test11 $ jit test11input
-  let b = (ngrad . jit) (reduceAdd' . test11) $ jit test11input
+      b = (ngrad . jit) (reduceAdd' . test11) $ jit test11input
   -- traceDebug ((`unsafeReduceAdd` [0, 1, 2, 3]) :: Tracer '[2, 4, 5, 2] Float -> Tracer '[] Float)
   print $ l2Loss (a - b)
 

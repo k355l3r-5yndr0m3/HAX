@@ -7,13 +7,9 @@ module HAX.Target where
 import HAX.Tensor.Tensorial
 import HAX.Tensor.Tensor
 
-import HAX.AD.Gradient
 import HAX.AD.Reverse
 
-import HAX.Jit
-import HAX.Utils
-
-import Control.Exception
+import Control.Exception hiding (TypeError)
 
 import Data.Coerce
 import Data.Proxy 
@@ -26,8 +22,6 @@ import Stablehlo.Dialect.Stablehlo.Attributes
 import GHC.TypeLits
 import Data.Int (Int64)
 import GHC.IsList
-
-import HAX.Tensor.Tracer
 
 -- Target: represent the target of vmap transformation
 --         Target dims r 
@@ -618,31 +612,6 @@ instance (T s t, TensorOp r, Transformable r, Vectorizable f) => Vectorizable (T
 vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b) 
 vmap f = vmap' [] (const f)
 
--- So that Target work for other transformations
--- TODO: Implement a feature for vmaping gradient function
--- instance (T s t, TraceableElement (r s t), Transformable r) => TraceableElement (Target r s t) where
---   constructTracer i = (i', Target [] t, tt)
---     where (i', t, tt) = constructTracer i
---   
---   deconstructTracer (Target [] t) = 
---     deconstructTracer t
---   deconstructTracer _ = error "deconstructTracer received an invalid target."
-
--- instance Reversable (Reverse r s t) => Reversable (Target (Reverse r) s t) where
---   type ReversedType (Target (Reverse r) s t) = ReversedType (Reverse r s t)
---   constructReverse i t = (i', Target [] r)
---     where (i', r) = constructReverse i t
---   gradReify _ = gradReify (Proxy :: Proxy (Reverse r s t))
--- 
--- instance (Reversable j, Num (r s t)) => ReverseMode (j -> Target (Reverse r) s t) where
---   type Rev g (j -> Target (Reverse r) s t)      = ReversedType j -> g
---   type GradResult (j -> Target (Reverse r) s t) = ReversedType j
--- 
---   rgrad' (reifier, i) f t = assert (null dims) reifier $ cotangent r 1
---     where Target dims r = f $ snd $ constructReverse i t
---   rgradReify (Annotated i) (gradReify (Proxy :: Proxy j) i  -> (_, g, Gradient g')) = assert (null g') g
-
--- type instance JitTransform (Target r s t) = Tensor s t
 instance JitIn (r s t) => JitIn (Target r s t) where
   type JitI (Target r s t) = JitI (r s t)
   jitIn i t = (i', Target [] t', bs)
@@ -657,12 +626,9 @@ instance GradIn (r s t) => GradIn (Target r s t) where
   gradIn i t = (Target [] t', i', r)
     where (t', i', r) = gradIn i t
 
-instance (GradIn a, TensorOp r, Tensorial t, Fractional t) => Grad (a -> Target (Reverse r) '[] t) where
-  type GradF' (a -> Target (Reverse r) '[] t) g = GradI a -> g <&> GradI a
-  type GradF  (a -> Target (Reverse r) '[] t)   = GradI a -> GradI a
-  grad' i recover f = grad' i recover f'
-    where f' t' = let Target _ g = f t'
-                  in  g
-  grad f t = fst $ recover $ g $ splat 0
-    where (t', _, recover) = gradIn 0 t
-          Target _ (R _ g) = f t'
+instance (TensorOp r, T s t, Fractional t) => Grad (Target (Reverse r) s t) where
+  type GradF' (Target (Reverse r) s t) g = g
+  type GradF  _                          = TypeError (Text "rgrad must be applied to a function")
+  grad' _ recover (Target _ (R _ g)) = fst . recover . g . splat $ 1
+  grad = undefined
+

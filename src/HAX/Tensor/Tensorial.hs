@@ -183,6 +183,7 @@ shapeOf :: forall r s t. KnownShape s => r s t -> [Integer]
 shapeOf _ = shapeVal (Proxy :: Proxy s)
 
 -- Tensorial
+type Z = Shape -> Type -> Type
 class (Prim (StorageType t), Storable (StorageType t), TypeGet (SHLOType t), Typeable t) => Tensorial t where
   type SHLOType t
   type StorageType t = r | r -> t
@@ -211,6 +212,10 @@ class (Prim (StorageType t), Storable (StorageType t), TypeGet (SHLOType t), Typ
   default gradientSum :: (TensorOp r, T s t, Fractional t) => [Dynamic] -> r s t
   gradientSum [] = splat 0 
   gradientSum gs = foldl1 unsafePairwiseAdd [fromDyn i $ error "Gradient ID scrambled!" | i <- gs]
+
+  showTensorial :: StorageType t -> String
+  default showTensorial :: Show (StorageType t) => StorageType t -> String
+  showTensorial = show
 
   -- For gradient
   -- TODO: Remove unneeded gradient function (ie those that does not needed additional constraint)
@@ -661,6 +666,12 @@ type family Split (lhs :: [a]) (rhs :: [a]) :: Constraint where
   Split _ _ = TypeError (Text "lhs and rhs can only differ by at most one elem")
 split :: (TensorOp r, T s t, T s' t, Split s s') => r s t -> [r s' t]
 split = unsafeSplit
+
+
+
+
+
+
 
 
 

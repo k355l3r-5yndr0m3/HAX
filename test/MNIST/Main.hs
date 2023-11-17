@@ -6,6 +6,7 @@ import HAX.IO
 
 import Data.Word
 import HAX.Jit (echoNumCompilations)
+import HAX.AD
 
 main :: IO ()
 main = do 
@@ -14,8 +15,6 @@ main = do
   
   let trainImageBatches :: [Tensor [2500, 28, 28] Float] = split trainImages
       trainLabelBatches :: [Tensor [2500, 10] Bool]      = split trainLabels
-
-  
 
 
   echoNumCompilations

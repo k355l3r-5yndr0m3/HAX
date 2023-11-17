@@ -1,8 +1,8 @@
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE DefaultSignatures #-}
 module HAX.Tensor.Tensor where
 import Prelude hiding (lookup, pred)
@@ -25,7 +25,10 @@ import Foreign.C (CIntPtr)
 import MLIR
 
 import GHC.IO.Unsafe (unsafePerformIO)
+import GHC.TypeError
 import GHC.IsList
+import GHC.Generics
+import Data.Kind (Type)
 
 
 newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
@@ -83,17 +86,17 @@ getScalar (Tensor b) = unsafePerformIO (toHaskell . (`indexByteArray` 0) <$> buf
 -- Pretty print tensor
 -- TODO: Fix, because this is just bad
 --       consider using bytestring
-instance (T s a, Show (StorageType a), Prim (StorageType a)) => Show (Tensor s a) where
+instance T s t => Show (Tensor s t) where
   show (Tensor b) = unsafePerformIO $ do
     hostbuff <- bufferToHostBuffer b
     let elemCount = sizeofByteArray hostbuff `div` elemSize
         shape     = (\ (fromIntegral -> a) -> (a - 1, a - 1)) <$> shapeVal (Proxy :: Proxy s)
     return $ fst $ formater (elemCount - 1) shape hostbuff ""
-    where elemSize = staticSizeOf (Proxy :: Proxy a)
+    where elemSize = staticSizeOf (Proxy :: Proxy t)
           formater :: Int -> [(Int, Int)] -> ByteArray -> String -> (String, Int)
           formater offs [] buf s = 
-            let a :: StorageType a = indexByteArray buf offs
-            in  (show a ++ s, offs - 1)
+            let a :: StorageType t = indexByteArray buf offs
+            in  (showTensorial a ++ s, offs - 1)
           formater offs ((idx, ext):ies) buf s
             | idx == 0  =
               let (s', offs') = formater offs ies buf ((if idx == ext then ']' else ','):s)
@@ -134,13 +137,6 @@ tensorSplat device a = do
 
 
 -- Implement a jit the convert from function of tracers to tensors 
-type family JitTracerTransform f
-type instance JitTracerTransform (Tensor s t) = Tracer s t
-type family JitTracer f where 
-  JitTracer (a ->  b) = JitTracerTransform a -> JitTracer b
-  JitTracer (a <&> b) = JitTracer a <&> JitTracer b
-  JitTracer a         = JitTracerTransform a
-
 instance ConvertOp Tensor where
   convert = jitT convert
 
@@ -253,10 +249,64 @@ instance (JitIn a, Jit b) => Jit (a -> b) where
           f'          = f t
           args'       = args ++ a'
 
+class GJitIn t where
+  type GJitI t :: k -> Type
+  gJitIn :: CIntPtr -> GJitI t x -> (CIntPtr, t x, [(Buffer, AnyType)])
+instance GJitIn V1 where
+  type GJitI V1 = V1
+  gJitIn i a = (i, a, [])
+instance GJitIn U1 where
+  type GJitI U1 = U1
+  gJitIn i a = (i, a, [])
+instance (GJitIn f, GJitIn g) => GJitIn (f :+: g) where
+  type GJitI (f :+: g) = GJitI f :+: GJitI g
+  gJitIn i (L1 f) = (i', L1 f', f'')
+    where (i', f', f'') = gJitIn i f
+  gJitIn i (R1 g) = (i', R1 g', g'')
+    where (i', g', g'') = gJitIn i g
+instance (GJitIn f, GJitIn g) => GJitIn (f :*: g) where
+  type GJitI (f :*: g) = GJitI f :*: GJitI g
+  gJitIn i (f :*: g) = (i'', f' :*: g', f'' ++ g'')
+    where (i' , f', f'') = gJitIn i  f
+          (i'', g', g'') = gJitIn i' g
+instance GJitIn f => GJitIn (M1 i t f) where
+  type GJitI (M1 i t f) = M1 i t (GJitI f)
+  gJitIn i (M1 t) = (i', M1 t', t'')
+    where (i', t', t'') = gJitIn i t
+instance JitIn t => GJitIn (K1 i t) where
+  type GJitI (K1 i t) = K1 i (JitI t)
+  gJitIn i (K1 t) = (i', K1 t', t'')
+    where (i', t', t'') = jitIn i t
 
 class JitIn t where
   type JitI t
   jitIn :: CIntPtr -> JitI t -> (CIntPtr, t, [(Buffer, AnyType)])
+  default jitIn :: (Generic t, Generic (JitI t), GJitIn (Rep t), GJitI (Rep t) ~ Rep (JitI t)) => CIntPtr -> JitI t -> (CIntPtr, t, [(Buffer, AnyType)])
+  jitIn i (from -> t) = (i', t', t'')
+    where (i', to -> t', t'') = gJitIn i t
+
+instance JitIn Integer where
+  type JitI Integer = Integer
+  jitIn = (, , [])
+instance JitIn Rational where
+  type JitI Rational = Rational
+  jitIn = (, , [])
+instance JitIn (Proxy a) where
+  type JitI (Proxy a) = Proxy a
+  jitIn = (, , [])
+instance JitIn Int where
+  type JitI Int = Int
+  jitIn = (, , [])
+instance JitIn Float where
+  type JitI Float = Float
+  jitIn = (, , [])
+instance JitIn Bool where
+  type JitI Bool = Bool
+  jitIn = (, , [])  
+instance JitIn (a -> b) where
+  type JitI (a -> b) = TypeError (Text "jit only support first order function")
+  jitIn = undefined
+
 instance JitIn a => JitIn [a] where
   type JitI [a] = [JitI a]
   jitIn i []     = (i, [], [])
@@ -325,6 +375,9 @@ instance T s t => JitOut (Tracer s t) where
     fmap (:[]) <$> t tbl, [tensorType' (Proxy :: Proxy (Tracer s t))], \case 
       []   -> error "Not enough output"
       a:as -> (Tensor a, as))
+instance JitOut (Proxy a) where
+  type JitO (Proxy a) = Proxy a
+  jitOut _ = (pure . (, []), [], (Proxy, ))
 
 type family ReverseJit f = f' | f' -> f where
   ReverseJit (a -> b)     = ReverseJit a -> ReverseJit b
@@ -342,3 +395,5 @@ jit = jit' 0 []
 
 jitT :: (Jit f, f ~ ReverseJit (JitF f)) => f -> JitF f
 jitT = jit
+
+type Jitter p = (JitIn p, JitOut p)

@@ -11,24 +11,21 @@ import HAX.Tensor.Tensor
 import HAX.AD.Gradient
 import HAX.Utils
 
-import Control.Exception
 
 import Data.Proxy
 import Data.List hiding (reverse)
 
 import Foreign.C
 
-import Data.Int (Int64)
 import GHC.IsList
-import Data.Word (Word8)
-import Data.Data (Typeable)
-import HAX.Tensor.Tracer (Tracer)
+import GHC.TypeError
+import GHC.Generics (Generic)
 
 -- TODO: Consider using coerse instead of Dynamic for gradient
 --       Slightly more safe and more performance
 -- TODO: Use pattern syn 
 -- TODO: Remove overlapping instances
-newtype Reverse r s t = Reverse (r s t, G r s t)
+newtype Reverse r s t = Reverse (r s t, G r s t) deriving Generic
 primal :: Reverse r s t -> r s t 
 primal (Reverse t) = fst t
 
@@ -232,23 +229,29 @@ class Grad f where
   grad' :: CIntPtr -> (Gradient -> (g, Gradient)) -> f -> GradF' f g
   grad  :: f -> GradF f
 
-instance (GradIn a, TensorOp r, Tensorial t, Fractional t) => Grad (a -> Reverse r '[] t) where
-  type GradF' (a -> Reverse r '[] t) g = GradI a -> g <&> GradI a
-  type GradF  (a -> Reverse r '[] t)   = GradI a -> GradI a
-  grad' i recover f t = fst $ recover' (n $ splat 1)
-    where recover' g = 
-            let (a,  g' ) = recover g
-                (as, g'') = rec g'
-            in  (a :&: as, g'')
-          (t', _, rec) = gradIn i t
-          R _ n = f t'
-  grad f t = fst $ recover $ g $ splat 0
-    where (t', _, recover) = gradIn 0 t
-          R _ g            = f t'
+-- instance (GradIn a, TensorOp r, T s t, Fractional t) => Grad (a -> Reverse r s t) where
+--   type GradF' (a -> Reverse r s t) g = GradI a -> g <&> GradI a
+--   type GradF  (a -> Reverse r s t)   = GradI a -> GradI a
+--   grad' i recover f t = fst $ recover' (n $ splat 1)
+--     where recover' g = 
+--             let (a,  g' ) = recover g
+--                 (as, g'') = rec g'
+--             in  (a :&: as, g'')
+--           (t', _, rec) = gradIn i t
+--           R _ n = f t'
+--   grad f t = fst $ recover $ g $ splat 0
+--     where (t', _, recover) = gradIn 0 t
+--           R _ g            = f t'
 
-instance (GradIn t, Grad (a -> b)) => Grad (t -> a -> b) where
-  type GradF' (t -> a -> b) g = GradI t -> GradF' (a -> b) (g <&> GradI t)
-  type GradF  (t -> a -> b)   = GradI t -> GradF' (a -> b) (GradI t)
+instance (TensorOp r, T s t, Fractional t) => Grad (Reverse r s t) where
+  type GradF' (Reverse r s t) g = g
+  type GradF  _                 = TypeError (Text "rgrad must be applied to a function")
+  grad' _ recover (R _ g) = fst . recover . g . splat $ 1
+  grad = undefined
+
+instance (GradIn t, Grad a) => Grad (t -> a) where
+  type GradF' (t -> a) g = GradI t -> GradF' a (g <&> GradI t)
+  type GradF  (t -> a)   = GradI t -> GradF' a (GradI t)
   grad' i recover f t = grad' i' recover' (f t')
     where recover' g = 
             let (a,  g' ) = recover g
