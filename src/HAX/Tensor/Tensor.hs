@@ -224,7 +224,7 @@ class Jit f where
   type JitF f
 
   jit' :: CIntPtr -> [(Buffer, AnyType)] -> f -> JitF f
-  default jit' :: (Jitter f, JitF f ~ JitO f) => CIntPtr -> [(Buffer, AnyType)] -> f -> JitF f
+  default jit' :: (Jitter f, JitF f ~ JitT f) => CIntPtr -> [(Buffer, AnyType)] -> f -> JitF f
   jit' _ (unzip -> (args, ins)) !t = unsafePerformIO $ do 
     program <- compile (ins, main, outs)
     fst . reifier <$> loadedExecutableExecute1Await program args Nothing nout
@@ -232,19 +232,19 @@ class Jit f where
           nout = length outs
 
 instance forall r (s :: Shape) t. Jitter (r s t) => Jit (r s t) where
-  type JitF (r s t) = JitO (r s t)
+  type JitF (r s t) = JitT (r s t)
 
 instance Jitter [t] => Jit [t] where
-  type JitF [t] = JitO [t]
+  type JitF [t] = JitT [t]
 
 instance Jitter (l <&> r) => Jit (l <&> r) where
-  type JitF (l <&> r) = JitO (l <&> r)
+  type JitF (l <&> r) = JitT (l <&> r)
 
 instance Jitter (l, r) => Jit (l, r) where
-  type JitF (l, r) = JitO (l, r)
+  type JitF (l, r) = JitT (l, r)
 
 instance (Jitter a, Jit b) => Jit (a -> b) where
-  type JitF (a -> b) = JitI a -> JitF b
+  type JitF (a -> b) = JitT a -> JitF b
   jit' i args !f a = jit' i' args' f'
     where (i', t, a') = jitIn i a
           f'          = f t
@@ -255,51 +255,44 @@ instance TypeError (Text "cannot jit this function") => JNT Tensor where
   fromTracer = undefined
   toTracer   = undefined
 
-class GJitIn t where
-  type GJitI t :: k -> Type
-  gJitIn :: CIntPtr -> GJitI t x -> (CIntPtr, t x, [(Buffer, AnyType)])
-instance GJitIn V1 where
-  type GJitI V1 = V1
+class GJitter t where
+  type GJitT t :: k -> Type
+  gJitIn :: CIntPtr -> GJitT t x -> (CIntPtr, t x, [(Buffer, AnyType)])
+  gJitOut :: t x -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (GJitT t x, [Buffer]))
+
+instance GJitter V1 where
+  type GJitT V1 = V1
   gJitIn i a = (i, a, [])
-instance GJitIn U1 where
-  type GJitI U1 = U1
-  gJitIn i a = (i, a, [])
-instance (GJitIn f, GJitIn g) => GJitIn (f :+: g) where
-  type GJitI (f :+: g) = GJitI f :+: GJitI g
+  gJitOut a = (pure . (,[]), [], (a,))
+
+instance (GJitter f, GJitter g) => GJitter (f :+: g) where
+  type GJitT (f :+: g) = GJitT f :+: GJitT g
   gJitIn i (L1 f) = (i', L1 f', f'')
     where (i', f', f'') = gJitIn i f
   gJitIn i (R1 g) = (i', R1 g', g'')
     where (i', g', g'') = gJitIn i g
-instance (GJitIn f, GJitIn g) => GJitIn (f :*: g) where
-  type GJitI (f :*: g) = GJitI f :*: GJitI g
-  gJitIn i (f :*: g) = (i'', f' :*: g', f'' ++ g'')
-    where (i' , f', f'') = gJitIn i  f
-          (i'', g', g'') = gJitIn i' g
-instance GJitIn f => GJitIn (M1 i t f) where
-  type GJitI (M1 i t f) = M1 i t (GJitI f)
-  gJitIn i (M1 t) = (i', M1 t', t'')
-    where (i', t', t'') = gJitIn i t
-instance Jitter t => GJitIn (K1 i t) where
-  type GJitI (K1 i t) = K1 i (JitI t)
-  gJitIn i (K1 t) = (i', K1 t', t'')
-    where (i', t', t'') = jitIn i t
-class GJitOut f where
-  type GJitO f :: k -> Type
-  gJitOut :: f x -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (GJitO f x, [Buffer]))
-instance GJitOut V1 where
-  type GJitO V1 = V1
-  gJitOut a = (pure . (,[]), [], (a,))
-instance GJitOut U1 where
-  type GJitO U1 = U1
-  gJitOut a = (pure . (,[]), [], (a,))
-instance (GJitOut f, GJitOut g) => GJitOut (f :+: g) where
-  type GJitO (f :+: g) = GJitO f :+: GJitO g
   gJitOut (L1 f) = (t, t', first L1 . t'')
     where (t, t', t'') = gJitOut f
   gJitOut (R1 g) = (t, t', first R1 . t'')
     where (t, t', t'') = gJitOut g
-instance (GJitOut f, GJitOut g) => GJitOut (f :*: g) where
-  type GJitO (f :*: g) = GJitO f :*: GJitO g
+
+instance GJitter f => GJitter (M1 i t f) where
+  type GJitT (M1 i t f) = M1 i t (GJitT f)
+  gJitIn i (M1 t) = (i', M1 t', t'')
+    where (i', t', t'') = gJitIn i t
+  gJitOut (M1 f) = (i, i', first M1 . i'')
+    where (i, i', i'') = gJitOut f
+
+instance GJitter U1 where
+  type GJitT U1 = U1
+  gJitIn i a = (i, a, [])
+  gJitOut a = (pure . (,[]), [], (a,))
+
+instance (GJitter f, GJitter g) => GJitter (f :*: g) where
+  type GJitT (f :*: g) = GJitT f :*: GJitT g
+  gJitIn i (f :*: g) = (i'', f' :*: g', f'' ++ g'')
+    where (i' , f', f'') = gJitIn i  f
+          (i'', g', g'') = gJitIn i' g
   gJitOut (a :*: b) = (\tbl -> do 
     (tbl' , a') <- ac tbl 
     (tbl'', b') <- bc tbl' 
@@ -311,85 +304,71 @@ instance (GJitOut f, GJitOut g) => GJitOut (f :*: g) where
       in  (a' :*: b', bs''))
     where (ac, at, ar) = gJitOut a
           (bc, bt, br) = gJitOut b
-instance Jitter t => GJitOut (K1 i t) where
-  type GJitO (K1 i t) = K1 i (JitO t)
+
+instance Jitter t => GJitter (K1 i t) where
+  type GJitT (K1 i t) = K1 i (JitT t)
+  gJitIn i (K1 t) = (i', K1 t', t'')
+    where (i', t', t'') = jitIn i t
   gJitOut (K1 t) = (i, i', first K1 . i'')
     where (i, i', i'') = jitOut t
-instance GJitOut f => GJitOut (M1 i t f) where
-  type GJitO (M1 i t f) = M1 i t (GJitO f)
-  gJitOut (M1 f) = (i, i', first M1 . i'')
-    where (i, i', i'') = gJitOut f
 
 class Jitter t where
-  type JitI t
-  jitIn :: CIntPtr -> JitI t -> (CIntPtr, t, [(Buffer, AnyType)])
-  default jitIn :: (Generic t, Generic (JitI t), GJitIn (Rep t), GJitI (Rep t) ~ Rep (JitI t)) => CIntPtr -> JitI t -> (CIntPtr, t, [(Buffer, AnyType)])
+  type JitT t
+  jitIn :: CIntPtr -> JitT t -> (CIntPtr, t, [(Buffer, AnyType)])
+  default jitIn :: (Generic t, Generic (JitT t), GJitter (Rep t), GJitT (Rep t) ~ Rep (JitT t)) => CIntPtr -> JitT t -> (CIntPtr, t, [(Buffer, AnyType)])
   jitIn i (from -> t) = (i', t', t'')
     where (i', to -> t', t'') = gJitIn i t
 
-  type JitO t
-  jitOut :: t -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (JitO t, [Buffer]))
-  default jitOut :: (Generic t, Generic (JitO t), GJitOut (Rep t), Rep (JitO t) ~ GJitO (Rep t)) => t -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (JitO t, [Buffer]))
+  jitOut :: t -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
+  default jitOut :: (Generic t, Generic (JitT t), GJitter (Rep t), Rep (JitT t) ~ GJitT (Rep t)) => t -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
   jitOut (from -> t) = (i, i', first to . i'')
     where (i, i', i'') = gJitOut t
 
-
 instance Jitter Integer where
-  type JitI Integer = Integer
+  type JitT Integer = Integer
   jitIn = (, , [])
-  type JitO Integer = Integer
   jitOut i = (pure . (,[]), [], (i,))
 
 instance Jitter Rational where
-  type JitI Rational = Rational
+  type JitT Rational = Rational
   jitIn = (, , [])
-  type JitO Rational = Rational
   jitOut i = (pure . (,[]), [], (i,))
 
 instance Jitter (Proxy a) where
-  type JitI (Proxy a) = Proxy a
+  type JitT (Proxy a) = Proxy a
   jitIn = (, , [])
-  type JitO (Proxy a) = Proxy a
   jitOut i = (pure . (,[]), [], (i,))
 
 instance Jitter Int where
-  type JitI Int = Int
+  type JitT Int = Int
   jitIn = (, , [])
-  type JitO Int = Int
   jitOut i = (pure . (,[]), [], (i,))
 
 instance Jitter Float where
-  type JitI Float = Float
+  type JitT Float = Float
   jitIn = (, , [])
-  type JitO Float = Float
   jitOut i = (pure . (,[]), [], (i,))
 
 instance Jitter Bool where
-  type JitI Bool = Bool
+  type JitT Bool = Bool
   jitIn = (, , [])  
-  type JitO Bool = Bool
   jitOut i = (pure . (,[]), [], (i,))
 
 instance Jitter (a -> b) where
-  type JitI (a -> b) = TypeError (Text "jit only support first order function")
+  type JitT (a -> b) = TypeError (Text "jit only support first order function")
   jitIn = undefined
-  type JitO (a -> b) = TypeError (Text "Something")
   jitOut = undefined
 
 instance Jitter a => Jitter [a] where
-  type JitI [a] = [JitI a]
-  type JitO [a] = [JitO a]
+  type JitT [a] = [JitT a]
 instance (Jitter a, Jitter b) => Jitter (a, b) where
-  type JitI (a, b) = (JitI a, JitI b)
-  type JitO (a, b) = (JitO a, JitO b)
+  type JitT (a, b) = (JitT a, JitT b)
 instance (Jitter a, Jitter b) => Jitter (a <&> b) where
-  type JitI (a <&> b) = JitI a <&> JitI b
-  type JitO (a <&> b) = JitO a <&> JitO b
+  type JitT (a <&> b) = JitT a <&> JitT b
 
 instance (JNT r, T s t) => Jitter (r s t) where
-  type JitI (r s t) = Tensor s t
+  type JitT (r s t) = Tensor s t
   jitIn i (Tensor buffer) = (i + 1, fromTracer . Tracer $ \t -> (t, ) <$> blockArg i, [(buffer, tensorType' (Proxy :: Proxy (Tracer s t)))])
-  type JitO (r s t) = Tensor s t
   jitOut (toTracer -> Tracer f) = (fmap (fmap (: [])) . f, [tensorType' (Proxy :: Proxy (Tracer s t))], 
     \case 
       []   -> error "Not enough output"

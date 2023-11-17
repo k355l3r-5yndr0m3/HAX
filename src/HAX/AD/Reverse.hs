@@ -173,8 +173,6 @@ instance (GradIn t, Grad a) => Grad (t -> a) where
   grad f t = grad' i' recover (f t')
     where (t', i', recover) = gradIn 0 t
 
-
-
 class GradIn t where
   type GradI t
   gradIn :: CIntPtr -> GradI t -> (t, CIntPtr, Gradient -> (GradI t, Gradient))
