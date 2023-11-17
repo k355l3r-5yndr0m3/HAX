@@ -1,10 +1,9 @@
 {-# LANGUAGE DataKinds #-}
 module HAX.Utils where
-import Data.Kind
-import GHC.TypeLits
+import GHC.Generics (Generic)
 
 newtype Annotated a b = Annotated a
-data a <&> b = a :&: b deriving Show
+data a <&> b = a :&: b deriving (Show, Generic)
 infixl 8 :&:, <&>
 instance (Num a, Num b) => Num (a <&> b) where
   alhs :&: blhs + arhs :&: brhs = 
