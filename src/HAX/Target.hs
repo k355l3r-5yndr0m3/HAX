@@ -584,9 +584,6 @@ instance (Floating t, T s t, TensorOp r, Transformable r) => Floating (Target r 
   sin = unsafePairwiseSin
   cos = unsafePairwiseCos
 
-
-
-
 -- VMap transform
 class Vectorizable f where
   type Vectorized (i :: Nat) f = r | r -> i f
@@ -611,11 +608,6 @@ instance (T s t, TensorOp r, Transformable r, Vectorizable f) => Vectorizable (T
 vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b) 
 vmap f = vmap' [] (const f)
 
-instance GradIn (r s t) => GradIn (Target r s t) where
-  type GradI (Target r s t) = GradI (r s t)
-  gradIn i t = (Target [] t', i', r)
-    where (t', i', r) = gradIn i t
-
 instance (TensorOp r, T s t, Fractional t) => Grad (Target (Reverse r) s t) where
   type GradF' (Target (Reverse r) s t) g = g
   type GradF  _                          = TypeError (Text "rgrad must be applied to a function")
@@ -625,3 +617,8 @@ instance (TensorOp r, T s t, Fractional t) => Grad (Target (Reverse r) s t) wher
 instance JNT r => JNT (Target r) where
   fromTracer = Target [] . fromTracer
   toTracer (Target _ i) = toTracer i
+
+instance (Transformable r, GNT r) => GNT (Target r) where
+  type Ins (Target r) = Ins r
+  fromReverse = Target [] . fromReverse
+  toReverse (Target _ r) = toReverse r

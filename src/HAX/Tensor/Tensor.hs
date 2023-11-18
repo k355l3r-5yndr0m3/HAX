@@ -298,10 +298,9 @@ instance (GJitter f, GJitter g) => GJitter (f :*: g) where
     (tbl'', b') <- bc tbl' 
     return (tbl'', a' ++ b'), 
     at ++ bt, 
-    \bs -> 
-      let (a', bs')  = ar bs
-          (b', bs'') = br bs'
-      in  (a' :*: b', bs''))
+    \bs -> let (a', bs')  = ar bs
+               (b', bs'') = br bs'
+           in  (a' :*: b', bs''))
     where (ac, at, ar) = gJitOut a
           (bc, bt, br) = gJitOut b
 
@@ -375,16 +374,6 @@ instance (JNT r, T s t) => Jitter (r s t) where
       a:as -> (Tensor a, as))
 
 
-     
-
-
-
-
-
-
-
-
-
 type family ReverseJit f = f' | f' -> f where
   ReverseJit (a -> b)     = ReverseJit a -> ReverseJit b
   ReverseJit [a]          = [ReverseJit a]
@@ -393,9 +382,7 @@ type family ReverseJit f = f' | f' -> f where
   ReverseJit (Tensor s t) = Tracer s t
 
 
--- This new jit might cause problem because of the unsafePerformIO, NOINLINE might solve one instance in the test
--- Given how slow the test ran, I guess that recompilation occure every time jit is called
--- TODO: Implement cache
+-- TODO: Implement caching
 jit :: Jit f => f -> JitF f
 jit = jit' 0 []
 

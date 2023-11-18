@@ -3,6 +3,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE DefaultSignatures #-}
 module HAX.AD.Reverse where
 import Prelude hiding (reverse)
 import HAX.Tensor
@@ -12,12 +13,14 @@ import HAX.Utils
 
 import Data.Proxy
 import Data.List hiding (reverse)
+import Data.Kind
 
 import Foreign.C
 
 import GHC.IsList
 import GHC.TypeError
-import GHC.Generics (Generic)
+import GHC.Generics
+import Data.Bifunctor (Bifunctor(first))
 
 -- TODO: Consider using coerse instead of Dynamic for gradient
 --       Slightly more safe and more performance
@@ -148,7 +151,6 @@ instance (Floating t, T s t, TensorOp r) => Floating (Reverse r s t) where
   sin = unsafePairwiseSin
   cos = unsafePairwiseCos
 
-
 class Grad f where  
   type GradF' f g
   type GradF  f
@@ -169,47 +171,86 @@ instance (GradIn t, Grad a) => Grad (t -> a) where
             let (a,  g' ) = recover g
                 (as, g'') = rec g'
             in  (a :&: as, g'')
-          (t', i', rec) = gradIn i t
+          (i', t', rec) = gradIn i t
   grad f t = grad' i' recover (f t')
-    where (t', i', recover) = gradIn 0 t
+    where (i', t', recover) = gradIn 0 t
+
+class GGradIn t where
+  type GGradI t :: k -> Type
+  gGradIn :: CIntPtr -> GGradI t x -> (CIntPtr, t x, Gradient -> (GGradI t x, Gradient))
+instance GGradIn V1 where
+  type GGradI V1 = V1
+  gGradIn i v = (i, v, (v, ))
+instance GGradIn U1 where
+  type GGradI U1 = U1
+  gGradIn i v = (i, v, (v, ))
+instance (GGradIn a, GGradIn b) => GGradIn (a :+: b) where
+  type GGradI (a :+: b) = GGradI a :+: GGradI b
+  gGradIn i (L1 a) = (i', L1 a', first L1 . g)
+    where (i', a', g) = gGradIn i a
+  gGradIn i (R1 b) =(i', R1 b', first R1 . g)
+    where (i', b', g) = gGradIn i b
+instance (GGradIn a, GGradIn b) => GGradIn (a :*: b) where
+  type GGradI (a :*: b) = GGradI a :*: GGradI b
+  gGradIn i (a :*: b) = (i'', a' :*: b', \gr -> 
+    let (_a, g' ) = ag gr
+        (_b, g'') = bg g'
+    in  (_a :*: _b, g''))
+    where (i' , a', ag) = gGradIn i  a
+          (i'', b', bg) = gGradIn i' b
+instance GradIn c => GGradIn (K1 i c) where
+  type GGradI (K1 i c) = K1 i (GradI c)
+  gGradIn i (K1 c) = (i', K1 c', first K1 . g)
+    where (i', c', g) = gradIn i c
+instance GGradIn f => GGradIn (M1 i t f) where
+  type GGradI (M1 i t f) = M1 i t (GGradI f)
+  gGradIn i (M1 f) = (i', M1 f', first M1 . g)
+    where (i', f', g) = gGradIn i f
 
 class GradIn t where
   type GradI t
-  gradIn :: CIntPtr -> GradI t -> (t, CIntPtr, Gradient -> (GradI t, Gradient))
+  gradIn :: CIntPtr -> GradI t -> (CIntPtr, t, Gradient -> (GradI t, Gradient))
+  default gradIn :: (Generic (GradI t), Generic t, GGradIn (Rep t), Rep (GradI t) ~ GGradI (Rep t)) => CIntPtr -> GradI t -> (CIntPtr, t, Gradient -> (GradI t, Gradient))
+  gradIn i (from -> t) = (i', to t', first to . g)
+    where (i', t', g) = gGradIn i t
 
-instance (T s t, TensorOp r) => GradIn (Reverse r s t) where
-  type GradI (Reverse r s t) = r s t
-  gradIn i r = (R r (independent i), i + 1, \(Gradient gs) ->
+class TensorOp (Ins r) => GNT (r :: Z) where
+  type Ins r :: Z
+  fromReverse :: Reverse (Ins r) s t -> r s t
+  toReverse   :: r s t -> Reverse (Ins r) s t
+
+instance TypeError (Text "Reverse wrapper is required") => GNT Tensor where
+  type Ins Tensor = Tensor
+  fromReverse = undefined
+  toReverse   = undefined
+
+instance TypeError (Text "Reverse wrapper is required") => GNT Tracer where
+  type Ins Tracer = Tracer
+  fromReverse = undefined
+  toReverse   = undefined
+
+instance TensorOp r => GNT (Reverse r) where
+  type Ins (Reverse r) = r
+  fromReverse = id
+  toReverse   = id
+
+instance (T s t, GNT r) => GradIn (r s t) where
+  type GradI (r s t) = (Ins r) s t
+  gradIn i r = (i + 1, fromReverse $ R r (independent i), \(Gradient gs) ->
     let (fmap snd -> g, gs') = partition ((== i) . fst) gs
     in  (gradientSum g, Gradient gs'))
+instance GradIn Rational where
+  type GradI Rational = Rational
+  gradIn = (, , (0,))
 
 instance GradIn a => GradIn [a] where
   type GradI [a] = [GradI a]
-  gradIn i []     = ([], i, ([], ))
-  gradIn i (a:as) = (a':as', i'', \gr -> 
-    let (r , gr' ) = g' gr
-        (r', gr'') = g'' gr'
-    in  (r:r', gr''))
-    where (a' , i' , g' ) = gradIn i  a
-          (as', i'', g'') = gradIn i' as 
 
 instance (GradIn a, GradIn b) => GradIn (a, b) where
   type GradI (a, b) = (GradI a, GradI b)
-  gradIn i (a, b) = ((a', b'), i'', \gr -> 
-    let (_a, g' ) = ag gr
-        (_b, g'') = bg g'
-    in  ((_a, _b), g''))
-    where (a', i' , ag) = gradIn i  a
-          (b', i'', bg) = gradIn i' b
 
 instance (GradIn a, GradIn b) => GradIn (a <&> b) where
   type GradI (a <&> b) = GradI a <&> GradI b
-  gradIn i (a :&: b) = (a' :&: b', i'', \gr -> 
-    let (_a, g' ) = ag gr
-        (_b, g'') = bg g'
-    in  (_a :&: _b, g''))
-    where (a', i' , ag) = gradIn i  a
-          (b', i'', bg) = gradIn i' b
 
 instance JNT r => JNT (Reverse r) where
   fromTracer = Reverse . (, undefined) . fromTracer

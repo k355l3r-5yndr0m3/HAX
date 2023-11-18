@@ -1,12 +1,19 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE NoStarIsType #-}
 module Main(main) where
+import GHC.TypeLits
 
 import HAX.Tensor
+import HAX.Target
 import HAX.IO
+import HAX.NN
 
 import Data.Word
 import HAX.Jit (echoNumCompilations)
 import HAX.AD
+
+type R s t = Target (Reverse Tracer) s t
+type Model r t = Reshape r t [28, 28] '[28 * 28] >> Dense r t (28 * 28) 392 >> ReLU r t '[392] >> Dense r t 392 196 >> ReLU r t '[196] >> Dense r t 196 98 >> ReLU r t '[98]
 
 main :: IO ()
 main = do 
