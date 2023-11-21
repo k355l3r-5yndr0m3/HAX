@@ -26,7 +26,7 @@ import Data.Bifunctor (Bifunctor(first))
 --       Slightly more safe and more performance
 -- TODO: Use pattern syn 
 -- TODO: Remove overlapping instances
-newtype Reverse r s t = Reverse (r s t, G r s t) deriving Generic
+newtype Reverse  r s t = Reverse  (r s t, G r s t)         deriving Generic
 primal :: Reverse r s t -> r s t 
 primal (Reverse t) = fst t
 
@@ -53,6 +53,7 @@ instance ConvertOp r => ConvertOp (Reverse r) where
 -- NOTE: This is strange, this constraint require undiciable instance if Reverse is constrained to Reverse (r :: Shape -> Type -> Type) (s :: Shape) (t :: Type)
 --        Why? (More reason to do the above)
 instance TensorOp r => TensorOp (Reverse r) where
+
   unsafeBroadcast (R f f') dims = R (unsafeBroadcast f dims) (unsafeBroadcastGrad f' dims)
   unsafeTranspose (R f f') perm = R (unsafeTranspose f perm) (f' . (`unsafeTranspose` perm'))
     where perm' = map snd $ sortOn fst $ zip perm [0..] 
@@ -94,7 +95,9 @@ instance TensorOp r => TensorOp (Reverse r) where
   unsafePairwiseAdd (R f f') (R g g') = R (unsafePairwiseAdd f g) (\i -> f' i <+> g' i)
   unsafePairwiseSub (R f f') (R g g') = R (unsafePairwiseSub f g) (\i -> f' i <+> g' (unsafePairwiseNegate i))
   unsafePairwiseMul (R f f') (R g g') = R (unsafePairwiseMul f g) (\i -> f' (unsafePairwiseMul i g) <+> g' (unsafePairwiseMul f i))
-  unsafePairwiseDiv (R f f') (R g g') = R (unsafePairwiseDiv f g) (\i -> f' (i `unsafePairwiseDiv` g) <+> g' (unsafePairwiseNegate (i `unsafePairwiseMul` (f `unsafePairwiseDiv` (g `unsafePairwiseMul` g)))))
+  unsafePairwiseDiv (R f f') (R g g') = R (unsafePairwiseDiv f g) $ \i -> f' (i &/ g) <+> g' (unsafePairwiseNegate ((i &* f) &/ (g &* g)))
+    where (&*) = unsafePairwiseMul
+          (&/) = unsafePairwiseDiv
   
   unsafePairwiseNegate (R f f') = R (unsafePairwiseNegate f) (f' . unsafePairwiseNegate)
   unsafePairwiseAbs    (R f f') = R (unsafePairwiseAbs f)    (\i -> f' $ unsafePairwiseSignum f `unsafePairwiseMul` i)
@@ -105,7 +108,7 @@ instance TensorOp r => TensorOp (Reverse r) where
   unsafePairwiseTanh   (R f f') = R y (\i -> f' (i `unsafePairwiseSub` (i `unsafePairwiseMul` (y `unsafePairwiseMul` y))))
     where y = unsafePairwiseTanh f
   unsafePairwiseExp (R f f') = 
-    Reverse (y, \i -> f' (i `unsafePairwiseMul` y))
+    Reverse (y, f' . (`unsafePairwiseMul` y))
     where y = unsafePairwiseExp f
   unsafePairwiseLog (R f f') = 
     R (unsafePairwiseLog f) (\i -> f' (i `unsafePairwiseDiv` f))
@@ -124,48 +127,37 @@ instance TensorOp r => TensorOp (Reverse r) where
   isLT (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (isLT lhs rhs, const zero)
   isLE (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (isLE lhs rhs, const zero)
 
-
-
-rgrad :: Grad f => f -> GradF f
-rgrad = grad 
-
-instance (Num t, T s t, TensorOp r) => Num (Reverse r s t) where
-  (+) = unsafePairwiseAdd
-  (-) = unsafePairwiseSub
-  (*) = unsafePairwiseMul
-
-  abs = unsafePairwiseAbs
-  negate = unsafePairwiseNegate
-  signum = unsafePairwiseSignum
-
-  fromInteger = splat . fromInteger
-
-instance (Fractional t, T s t, TensorOp r) => Fractional (Reverse r s t) where
-  (/) = unsafePairwiseDiv
-  fromRational = splat . fromRational
-
-instance (Floating t, T s t, TensorOp r) => Floating (Reverse r s t) where
-  pi = splat pi
-  exp = unsafePairwiseExp
-  log = unsafePairwiseLog
-  sin = unsafePairwiseSin
-  cos = unsafePairwiseCos
+  unsafeArgmax (R f _) axis = R (unsafeArgmax f axis) nograd
 
 class Grad f where  
-  type GradF' f g
-  type GradF  f
+  type GradF'  f g
+  type FGradF' f g
+  type GradF   f
+  type FGradF  f
   grad' :: CIntPtr -> (Gradient -> (g, Gradient)) -> f -> GradF' f g
   grad  :: f -> GradF f
 
-instance (TensorOp r, T s t, Fractional t) => Grad (Reverse r s t) where
-  type GradF' (Reverse r s t) g = g
-  type GradF  _                 = TypeError (Text "rgrad must be applied to a function")
-  grad' _ recover (R _ g) = fst . recover . g . splat $ 1
+  fgrad' :: CIntPtr -> (Gradient -> (g, Gradient)) -> f -> FGradF' f g
+  fgrad  :: f -> FGradF f
+
+instance (GNT r, T s t, Fractional t) => Grad (r s t) where
+  type GradF'  (r s t) g = g
+  type FGradF' (r s t) g = (Ins r s t, g)
+
+  type GradF  _          = TypeError (Text "rgrad must be applied to a function")
+  type FGradF _          = TypeError (Text "rgrad must be applied to a function")
+  grad' _ recover (toReverse -> R _ g) = fst . recover . g . splat $ 1
   grad = undefined
 
+  fgrad' _ recover (toReverse -> R f g) = (f, fst . recover . g . splat $ 1)
+  fgrad = undefined
+
 instance (GradIn t, Grad a) => Grad (t -> a) where
-  type GradF' (t -> a) g = GradI t -> GradF' a (g <&> GradI t)
-  type GradF  (t -> a)   = GradI t -> GradF' a (GradI t)
+  type GradF'  (t -> a) g = GradI t -> GradF'  a (g <&> GradI t)
+  type FGradF' (t -> a) g = GradI t -> FGradF' a (g <&> GradI t)
+
+  type GradF  (t -> a)    = GradI t -> GradF'  a (GradI t)
+  type FGradF (t -> a)    = GradI t -> FGradF' a (GradI t) 
   grad' i recover f t = grad' i' recover' (f t')
     where recover' g = 
             let (a,  g' ) = recover g
@@ -173,6 +165,15 @@ instance (GradIn t, Grad a) => Grad (t -> a) where
             in  (a :&: as, g'')
           (i', t', rec) = gradIn i t
   grad f t = grad' i' recover (f t')
+    where (i', t', recover) = gradIn 0 t
+
+  fgrad' i recover f t = fgrad' i' recover' (f t')
+    where recover' g = 
+            let (a,  g' ) = recover g
+                (as, g'') = rec g'
+            in  (a :&: as, g'')
+          (i', t', rec) = gradIn i t
+  fgrad f t = fgrad' i' recover (f t')
     where (i', t', recover) = gradIn 0 t
 
 class GGradIn t where

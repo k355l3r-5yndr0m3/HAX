@@ -14,25 +14,30 @@ import HAX.PjRt.BufferType
 
 import HAX.AD.Gradient
 
+import Control.Monad
+import Control.Exception (assert)
+
 import Data.Kind 
+import Data.Dynamic
 import Data.Proxy
 import Data.Reflection
 import Data.Primitive
 import Data.Int
 import Data.List
+import Data.Bifunctor
+import Data.Maybe (fromJust)
 
 import Foreign hiding (sizeOf, rotate)
+import Foreign.C (CIntPtr)
 
 import GHC.TypeLits
+import GHC.Real (infinity)
 
 import MLIR
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
 import Stablehlo.Dialect.Stablehlo.Attributes
-import Control.Exception (assert)
-import Data.Maybe (fromJust)
-import Foreign.C (CIntPtr)
-import Data.Dynamic (toDyn, Typeable, Dynamic, fromDyn)
+import System.Random.Stateful
 
 -- TODO: Remove Typeable
 
@@ -217,6 +222,31 @@ class (Prim (StorageType t), Storable (StorageType t), TypeGet (SHLOType t), Typ
   default showTensorial :: Show (StorageType t) => StorageType t -> String
   showTensorial = show
 
+  -- The lowest possible value (if this can be sorted)
+  -- max maxIdent a = a and max a maxIdent = a
+  maxIdent :: Ord t => t
+  default maxIdent :: (Ord t, Bounded t) => t 
+  maxIdent = minBound
+
+  -- The second r s t is the gradient
+  -- TODO: Make a newtype
+  updateParameter :: (TensorOp r, KnownShape s) => Double -> r s t -> r s t -> r s t
+  default updateParameter :: (TensorOp r, KnownShape s, Fractional t) => Double -> r s t -> r s t -> r s t
+  updateParameter (splat . realToFrac -> stepsize) initial gradient = initial `unsafePairwiseSub` delta
+    where delta = gradient `unsafePairwiseMul` stepsize
+
+  tensorialUniformRM :: StatefulGen g m => Int -> (t, t) -> g -> m (IO (Ptr (StorageType t))) 
+  default tensorialUniformRM :: (StatefulGen g m, UniformRange (StorageType t)) => Int -> (t, t) -> g -> m (IO (Ptr (StorageType t))) 
+  tensorialUniformRM n (bimap fromHaskell fromHaskell -> range) key = do 
+    entropy <- replicateM n $ uniformRM range key
+    return $ do 
+      buffer <- mallocArray n
+      pokeArray buffer entropy 
+      return buffer
+  tensorialUniformM :: StatefulGen g m => Int -> g -> m (IO (Ptr (StorageType t)))
+  default tensorialUniformM :: (StatefulGen g m, UniformRange (StorageType t), Num t) => Int -> g -> m (IO (Ptr (StorageType t))) 
+  tensorialUniformM = (`tensorialUniformRM` (-1, 1))
+
   -- For gradient
   -- TODO: Remove unneeded gradient function (ie those that does not needed additional constraint)
   unsafeBroadcastGrad :: (TensorOp r, T s0 t, T s1 t) => G r s0 t -> [Integer] -> r s1 t -> Gradient
@@ -357,8 +387,10 @@ instance Tensorial Float where
   
   literalPad = 0
   comparisonType _ = ComparisonTypeFloat
-                                                                                                                                                                                                                    
-                                                                                                                                                                                                            
+  tensorialUniformM = (`tensorialUniformRM` (-0.2, 0.2))
+
+  maxIdent = -fromRational infinity
+                                                                                                                                                       
   unsafeReduceAddGrad :: forall s0 s1 r. (TensorOp r, KnownShape s0, KnownShape s1) => G r s0 Float -> [Integer] -> G r s1 Float
   unsafeReduceAddGrad f' dims i = f' $ unsafeBroadcast i _map
     where _map = 
@@ -431,6 +463,7 @@ instance Tensorial Word8 where
 
   literalPad = 0
   comparisonType _ = ComparisonTypeUnsigned
+  updateParameter _ i _ = i
 
   unsafeBroadcastGrad _ _ = nograd
   unsafeSliceGrad _ _ = nograd
@@ -464,6 +497,7 @@ instance Tensorial Int64 where
 
   literalPad = 0
   comparisonType _ = ComparisonTypeSigned
+  updateParameter _ i _ = i
 
   unsafeBroadcastGrad _ _ = nograd
   unsafeSliceGrad _ _ = nograd
@@ -478,7 +512,7 @@ instance Tensorial Int64 where
   gradientSum _ = splat 0
 
 
-newtype Pred = Pred Word8 deriving (Num, Eq, Prim, Storable)
+newtype Pred = Pred { unPred :: Word8 } deriving (Num, Eq, Prim, Storable)
 instance Show Pred where 
   show (Pred 0) = "False"
   show _        = "True "
@@ -503,6 +537,14 @@ instance Tensorial Bool where
 
   literalPad = False
   comparisonType _ = ComparisonTypeUnsigned
+  updateParameter _ i _ = i
+  tensorialUniformRM n (bimap (unPred . fromHaskell) (unPred . fromHaskell) -> range) key = do 
+    (fmap Pred -> entropy) <- replicateM n $ uniformRM range key
+    return $ do 
+      buffer <- mallocArray n
+      pokeArray buffer entropy 
+      return buffer
+  tensorialUniformM = (`tensorialUniformRM` (False, True))
 
   unsafeBroadcastGrad _ _ = nograd
   unsafeSliceGrad _ _ = nograd
@@ -536,13 +578,10 @@ instance (KnownNat i, TensorLiteral is) => TensorLiteral (i ': is) where
   fromTensorLiteral (fromInteger . product . shapeVal -> nelem) p c l = take nelem (concatMap f l ++ repeat p)
     where f = fromTensorLiteral (Proxy :: Proxy is) p c
 
-
 type family FirstOrder (f :: Type) :: Constraint where
   FirstOrder ((a -> b) -> c) = TypeError (Text "Function is not first order")
   FirstOrder (a -> b)        = FirstOrder b
   FirstOrder _               = ()
-
-
 
 tensorType :: forall a s t. T s t => Proxy (a s t) -> RankedTensorType NullAttr (SHLOType t)
 tensorType _ = RankedTensorType shape _type NullAttr
@@ -560,14 +599,21 @@ class ConvertOp (r :: Shape -> Type -> Type) where
 
 
 type T s t = (KnownShape s, Tensorial t)
-
-
 -- The lhs (image, or volume, or whatever) is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
 --     rhs (kernel)                        is [IN FEAT DIM,  ...(SPATIAL DIM)..., OUT FEAT DIM]
 --     output                              is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
 -- This is to simplify implementation
 class Typeable r => TensorOp (r :: Shape -> Type -> Type) where
+  type Ticked r = g | g -> r
+  ticking    :: T s t => r s t -> Ticked r
+  unticking  :: T s t => Ticked r -> Maybe (r s t)
+  unticking' :: T s t => Ticked r -> r s t
+
+  correctShape :: r s t -> r s' t -- only change the type, does nothing to the underlying data
+
   -- without type checking, internal use only
+  -- TODO: Add simple constraints to the dtype, since that does not make other things more difficult
+  -- TODO: Add Shapeless Rs
   unsafeBroadcast    :: (T s0 t, T s1 t) => r s0 t -> [Integer] -> r s1 t
   unsafeTranspose    :: (T s0 t, T s1 t) => r s0 t -> [Integer] -> r s1 t
   unsafeReshape      :: (T s0 t, T s1 t) => r s0 t -> r s1 t 
@@ -609,7 +655,10 @@ class Typeable r => TensorOp (r :: Shape -> Type -> Type) where
   select             :: (T s t) => r s t -> r s t -> r s   Bool -> r s t
   splat              :: (T s t) => t -> r s t
 
-  -- TODO: Move this to a different class
+  -- TODO: Return both the argmax and max values
+  unsafeArgmax :: (Ord t, T s t, T s' t) => r s t -> Int -> r s' Int64
+
+  -- TODO: Move these to a different class
   unsafeLinspace     :: forall s t. (T s t, Fractional t) => Integer -> (t, t) -> r s t
   unsafeLinspace axis (low, high) = unsafeIota axis `unsafePairwiseMul` splat delta
     where delta = (high - low) / (nstep - 1)
@@ -659,6 +708,42 @@ class Typeable r => TensorOp (r :: Shape -> Type -> Type) where
           rank       = length operandShape
           slicing i  = zipWith (\a o -> if a == splitAxis then (i * sliceDim, (i + 1) * sliceDim, 1) else (0, o, 1)) [0..rank - 1] operandShape
 
+  unsafeSoftmax :: forall s t. (T s t, Floating t) => r s t -> [Int] -> r s t 
+  unsafeSoftmax (unsafePairwiseExp -> operand) redims = 
+    reifyShape (rais redims shape) $ \(same (unsafeReduceAdd operand $ fromIntegral <$> redims) -> k) -> 
+      operand `unsafePairwiseDiv` (unsafeBroadcast k (rais redims (zipWith const [0..] shape)) + 1e-3)
+    where rai i l = take i l ++ drop (i + 1) l
+          rais (sort -> y) l = 
+            let rais' []     k = k
+                rais' (i:is) k = 
+                  rais' ((\v -> v - 1) <$> is) (rai i k)
+            in  rais' y l
+          same :: r s' t -> Proxy s' -> r s' t
+          same = const 
+          shape = shapeVal (Proxy :: Proxy s)
+
+instance (TensorOp r, T s t, Num t) => Num (r s t) where
+  (+) = unsafePairwiseAdd
+  (-) = unsafePairwiseSub
+  (*) = unsafePairwiseMul
+
+  abs = unsafePairwiseAbs
+  negate = unsafePairwiseNegate
+  signum = unsafePairwiseSignum
+
+  fromInteger = splat . fromInteger
+
+instance (TensorOp r, T s t, Fractional t) => Fractional (r s t) where
+  (/) = unsafePairwiseDiv
+  fromRational = splat . fromRational
+
+instance (Floating t, T s t, TensorOp r) => Floating (r s t) where
+  pi = splat pi
+  exp = unsafePairwiseExp
+  log = unsafePairwiseLog
+  sin = unsafePairwiseSin
+  cos = unsafePairwiseCos
+
 type family Split (lhs :: [a]) (rhs :: [a]) :: Constraint where
   Split (a ': ls) (a ': rs) = (a ~ a, Split ls rs)
   Split (a ': ls) (b ': rs) = (ls ~ rs)
@@ -666,17 +751,6 @@ type family Split (lhs :: [a]) (rhs :: [a]) :: Constraint where
   Split _ _ = TypeError (Text "lhs and rhs can only differ by at most one elem")
 split :: (TensorOp r, T s t, T s' t, Split s s') => r s t -> [r s' t]
 split = unsafeSplit
-
-
-
-
-
-
-
-
-
-
-
 
 
 type family ValidIdx (x :: [a]) (y :: Nat) :: Constraint where
@@ -777,21 +851,36 @@ infixl 9 |#|
 (|@|) = matmul
 infixl 8 |@|
 
-
-
-
 -- TODO: Add conditional
-relu :: (T s t, Num (r s t), TensorOp r) => r s t -> r s t
+relu :: (T s t, TensorOp r, Num t) => r s t -> r s t
 relu x = select 0 x (x `isGT` 0)
 
-leakyrelu :: (Num (r s t), T s t, TensorOp r) => r '[] t -> r s t -> r s t
+leakyrelu :: (T s t, TensorOp r, Num t) => r '[] t -> r s t -> r s t
 leakyrelu alpha = leakyrelu' $ broadcast alpha (Proxy :: Proxy '[])
 
-leakyrelu' :: (Num (r s t), T s t, TensorOp r) => r s t -> r s t -> r s t
+leakyrelu' :: (T s t, TensorOp r, Num t) => r s t -> r s t -> r s t
 leakyrelu' alpha x = x * select alpha 1 (x `isGT` 0)
-
-l2Loss :: (KnownShape s, Num t, Num (a s t), Tensorial t, TensorOp a) => a s t -> a '[] t
-l2Loss x = reduceAdd' $ x * x 
 
 sigmoid :: Floating a => a -> a
 sigmoid x = recip (1 + exp (negate x))
+
+softmax :: forall r s t. (TensorOp r, T s t, Floating t) => r s t -> r s t
+softmax operand = unsafeSoftmax operand (take rank [0..])
+  where rank = fromIntegral $ shapeRank (Proxy :: Proxy s)
+
+mse :: forall r s t. (TensorOp r, T s t, Fractional t) => r s t -> r s t -> r '[] t
+mse x y = (/splat n) $ reduceAdd' $ d * d
+  where d = x - y
+        n = product $ fromInteger <$> shapeVal (Proxy :: Proxy s)
+
+crossEntropy :: forall r s t. (TensorOp r, T s t, Floating t) => r s t -> r s t -> r '[] t
+crossEntropy p q = (/splat n) . negate $ reduceAdd' (p * log q)
+  where n = product $ fromInteger <$> shapeVal (Proxy :: Proxy s)
+
+type family Argmax (a :: Shape) (d :: Nat) :: Shape where
+  Argmax (a ': as) 0 = as
+  Argmax (a ': as) i = a ': Argmax as (i - 1)
+  Argmax '[]       _ = TypeError (Text "Reduction axis invalid")
+
+argmax :: (TensorOp r, T s t, Ord t, KnownNat axis, s' ~ Argmax s axis, T s' Int64) => r s t -> Proxy axis -> r s' Int64
+argmax operand = unsafeArgmax operand . fromIntegral . natVal

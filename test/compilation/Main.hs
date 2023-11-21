@@ -36,7 +36,7 @@ test11 input = reduceAdd' (unsafeConcat 0 a' b' :: R [2, 3, 2] Float)
 
 main :: IO ()
 main = do
-  let a = (jit . rgrad) test11 $ jit test11input
+  let a = (jit . grad) test11 $ jit test11input
 --      b = (ngrad . jit) test11 $ jit test11input
   -- traceDebug ((`unsafeReduceAdd` [0, 1, 2, 3]) :: Tracer '[2, 4, 5, 2] Float -> Tracer '[] Float)
   -- print (unsafeReduceAdd ([[0, 1], [3, 4]] :: Tensor '[2, 2] Float) [0, 1] :: Tensor '[] Float)

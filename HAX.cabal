@@ -101,6 +101,7 @@ library
                       HAX.PjRt.Event
                       HAX.PjRt.LoadedExecutable
                       HAX.PjRt.Client
+                      HAX.NN.Model
                       HAX.NN.Parameterized
 
 
@@ -201,6 +202,7 @@ test-suite HAX-MNIST-test
     main-is:          Main.hs 
     build-depends:    base,
                       HAX,
+                      random
 
   
 test-suite HAX-compilation-test

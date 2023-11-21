@@ -18,6 +18,10 @@ import HAX.Utils
 
 import Data.Proxy
 import Data.Primitive hiding (newArray)
+import Data.Kind (Type)
+import Data.Bifunctor (Bifunctor(first))
+import Data.Coerce (coerce)
+import Data.Maybe (fromJust)
 
 import Foreign
 import Foreign.C (CIntPtr)
@@ -28,15 +32,13 @@ import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.TypeError
 import GHC.IsList
 import GHC.Generics
-import Data.Kind (Type)
-import Data.Bifunctor (Bifunctor(first))
 
 
 newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
-newtype AnyTsr = AnyTsr { getAnyTsrBuffer :: Buffer }
+newtype Tensor' = Tensor' { getTensor'Buffer :: Buffer }
 
-toTensor :: forall s t. T s t => AnyTsr -> Maybe (Tensor s t)
-toTensor (getAnyTsrBuffer -> buffer) = 
+toTensor :: forall s t. T s t => Tensor' -> Maybe (Tensor s t)
+toTensor (getTensor'Buffer -> buffer) = 
   if (shape == bufferDimensions buffer) && (_type == bufferElementType buffer) then 
     Just (Tensor buffer)
   else
@@ -44,8 +46,8 @@ toTensor (getAnyTsrBuffer -> buffer) =
   where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
         _type = pjrtBufferType (Proxy :: Proxy t)
 
-toTensor' :: forall s t. T s t => AnyTsr -> Tensor s t
-toTensor' (getAnyTsrBuffer -> buffer) = 
+toTensor' :: forall s t. T s t => Tensor' -> Tensor s t
+toTensor' (getTensor'Buffer -> buffer) = 
   if (shape == bufferDimensions buffer) && (_type == bufferElementType buffer) then 
     Tensor buffer
   else
@@ -54,8 +56,8 @@ toTensor' (getAnyTsrBuffer -> buffer) =
         _type = pjrtBufferType (Proxy :: Proxy t)
 
 
-withAnyTsr :: AnyTsr -> (forall s t. T s t => Tensor s t -> a) -> a
-withAnyTsr (AnyTsr buffer) func = 
+withTensor' :: Tensor' -> (forall s t. T s t => Tensor s t -> a) -> a
+withTensor' (Tensor' buffer) func = 
   reifyShape shape $ \shape' -> 
     let elemtype = bufferElementType buffer 
     in  if elemtype == f32 then 
@@ -72,11 +74,14 @@ withAnyTsr (AnyTsr buffer) func =
         same :: T s t => Proxy s -> Proxy t -> Tensor s t
         same _ _ = Tensor buffer
 
-anyTsrShape :: AnyTsr -> [Int]
-anyTsrShape = fmap fromIntegral . bufferDimensions . getAnyTsrBuffer
+tensor'Shape :: Tensor' -> [Int]
+tensor'Shape = fmap fromIntegral . bufferDimensions . getTensor'Buffer
 
-anyTsrType  :: AnyTsr -> BufferType
-anyTsrType = bufferElementType . getAnyTsrBuffer
+tensor'Type  :: Tensor' -> BufferType
+tensor'Type = bufferElementType . getTensor'Buffer
+
+whatTensor :: Tensor' -> ([Int], BufferType)
+whatTensor anytsr = (tensor'Shape anytsr, tensor'Type anytsr)
 
 debugTensorShape :: Tensor s t -> [Int]
 debugTensorShape = fmap fromIntegral . bufferDimensions . getTensorBuffer
@@ -106,6 +111,8 @@ instance T s t => Show (Tensor s t) where
               let c = if idx == ext then ']' else ','
                   (s', offs') = formater offs ies buf (c:s)
               in  formater offs' ((idx - 1, ext):ies) buf s'
+instance Show Tensor' where
+  show anytsr = withTensor' anytsr show
 
 instance (T s t, TensorLiteral s, [i] ~ Literal s t) => IsList (Tensor s t) where
   type Item (Tensor s t) = ListItem (Literal s t)
@@ -142,6 +149,13 @@ instance ConvertOp Tensor where
   convert = jitT convert
 
 instance TensorOp Tensor where
+  type Ticked Tensor = Tensor'
+  ticking    = coerce
+  unticking  = toTensor
+  unticking' = fromJust . toTensor
+
+  correctShape = coerce
+
   unsafeBroadcast operand dims = jitT (`unsafeBroadcast` dims) operand
   unsafeTranspose operand perm = jitT (`unsafeTranspose` perm) operand
   unsafeReshape = jitT unsafeReshape
@@ -193,31 +207,10 @@ instance TensorOp Tensor where
   isLT = jitT isLT
   isLE = jitT isLE
 
-  unsafeSplit = jitT unsafeSplit
+  unsafeSplit   = jitT unsafeSplit
+  unsafeSoftmax = jitT unsafeSoftmax
 
-
-instance (Num t, T s t) => Num (Tensor s t) where
-  (+) = unsafePairwiseAdd
-  (-) = unsafePairwiseSub
-  (*) = unsafePairwiseMul
-
-  abs = unsafePairwiseAbs
-  negate = unsafePairwiseNegate
-  signum = unsafePairwiseSignum
-
-  fromInteger = splat . fromInteger
-
-instance (Fractional t, T s t) => Fractional (Tensor s t) where
-  (/) = unsafePairwiseDiv
-  fromRational = splat . fromRational
-
-instance (Floating t, T s t) => Floating (Tensor s t) where
-  pi = splat pi
-  exp = unsafePairwiseExp
-  log = unsafePairwiseLog
-  sin = unsafePairwiseSin
-  cos = unsafePairwiseCos
-  tanh = unsafePairwiseTanh
+  unsafeArgmax  = jitT unsafeArgmax
 
 -- Maybe merge Tensor and Tracer
 class Jit f where
@@ -226,12 +219,12 @@ class Jit f where
   jit' :: CIntPtr -> [(Buffer, AnyType)] -> f -> JitF f
   default jit' :: (Jitter f, JitF f ~ JitT f) => CIntPtr -> [(Buffer, AnyType)] -> f -> JitF f
   jit' _ (unzip -> (args, ins)) !t = unsafePerformIO $ do 
-    program <- compile (ins, main, outs)
     fst . reifier <$> loadedExecutableExecute1Await program args Nothing nout
     where (main, outs, reifier) = jitOut t
           nout = length outs
+          program = compile (ins, main, outs)
 
-instance forall r (s :: Shape) t. Jitter (r s t) => Jit (r s t) where
+instance forall (r :: Shape -> Type -> Type) (s :: Shape) t. Jitter (r s t) => Jit (r s t) where
   type JitF (r s t) = JitT (r s t)
 
 instance Jitter [t] => Jit [t] where
@@ -258,7 +251,7 @@ instance TypeError (Text "cannot jit this function") => JNT Tensor where
 class GJitter t where
   type GJitT t :: k -> Type
   gJitIn :: CIntPtr -> GJitT t x -> (CIntPtr, t x, [(Buffer, AnyType)])
-  gJitOut :: t x -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (GJitT t x, [Buffer]))
+  gJitOut :: t x -> (StableCache Value -> BlockM (StableCache Value, [Value]), [AnyType], [Buffer] -> (GJitT t x, [Buffer]))
 
 instance GJitter V1 where
   type GJitT V1 = V1
@@ -318,8 +311,8 @@ class Jitter t where
   jitIn i (from -> t) = (i', t', t'')
     where (i', to -> t', t'') = gJitIn i t
 
-  jitOut :: t -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
-  default jitOut :: (Generic t, Generic (JitT t), GJitter (Rep t), Rep (JitT t) ~ GJitT (Rep t)) => t -> (StableNameHashTable Value -> BlockM (StableNameHashTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
+  jitOut :: t -> (StableCache Value -> BlockM (StableCache Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
+  default jitOut :: (Generic t, Generic (JitT t), GJitter (Rep t), Rep (JitT t) ~ GJitT (Rep t)) => t -> (StableCache Value -> BlockM (StableCache Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
   jitOut (from -> t) = (i, i', first to . i'')
     where (i, i', i'') = gJitOut t
 
@@ -380,6 +373,7 @@ type family ReverseJit f = f' | f' -> f where
   ReverseJit (a, b)       = (ReverseJit a, ReverseJit b)
   ReverseJit (a <&> b)    = ReverseJit a <&> ReverseJit b
   ReverseJit (Tensor s t) = Tracer s t
+  ReverseJit Int          = Int
 
 
 -- TODO: Implement caching

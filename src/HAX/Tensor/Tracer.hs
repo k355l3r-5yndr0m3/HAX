@@ -7,13 +7,13 @@ module HAX.Tensor.Tracer where
 import Prelude hiding (lookup)
 
 import HAX.Tensor.Tensorial
+import HAX.Utils
 
 import Control.Exception
 
-import Data.IntMap.Strict hiding (singleton, null, map, foldl, lookup)
-import qualified Data.IntMap.Strict as I
 import Data.Proxy
 import Data.Primitive
+import Data.Coerce
 
 import Foreign
 
@@ -25,29 +25,11 @@ import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
 import GHC.IsList
 
-newtype StableNameHashTable a = StableNameHashTable (IntMap [(forall b. StableName b -> Bool, a)])
-lookupStableName :: StableName a -> StableNameHashTable b -> Maybe b
-lookupStableName name (StableNameHashTable table) = 
-  case I.lookup hash table of
-    Nothing -> Nothing
-    Just ls -> 
-      let search :: [(forall b. StableName b -> Bool, a)] -> Maybe a
-          search []          = Nothing
-          search ((l, v):as) = 
-            if l name then 
-              Just v 
-            else 
-              search as
-      in  search ls
-  where hash = hashStableName name
-insertStableName :: StableName a -> b -> StableNameHashTable b -> StableNameHashTable b
-insertStableName name value (StableNameHashTable table) = 
-  StableNameHashTable $ insertWith (++) hash [(eqStableName name, value)] table
-  where hash = hashStableName name
 
-newtype Tracer (s :: Shape) t = Tracer (StableNameHashTable Value -> BlockM (StableNameHashTable Value, Value))
+newtype Tracer (s :: Shape) t = Tracer (StableCache Value -> BlockM (StableCache Value, Value))
+newtype Tracer' = Tracer' (StableCache Value -> BlockM (StableCache Value, Value))
 
-newtype TracerM a = TracerM (StableNameHashTable Value -> BlockM (StableNameHashTable Value, a))
+newtype TracerM a = TracerM (StableCache Value -> BlockM (StableCache Value, a))
 instance Functor TracerM where
   fmap f (TracerM a) = TracerM $ \ t0 -> do 
     (t1, a') <- a t0 
@@ -74,14 +56,14 @@ mkTracer :: TracerM Value -> Tracer s t
 mkTracer (TracerM f) = Tracer f
 
 -- Some how the new jiting method produce hash collision !?
-sharing' :: forall s t. T s t => Tracer s t -> StableNameHashTable Value -> BlockM (StableNameHashTable Value, Value)
+sharing' :: forall s t. T s t => Tracer s t -> StableCache Value -> BlockM (StableCache Value, Value)
 sharing' tracer@(Tracer f) table = do 
   name <- blockRunIO (makeStableName $! tracer)
-  case lookupStableName name table of
+  case cacheLookup name table of
     Just item -> return (table, item)
     Nothing   -> do 
       (table', item) <- f table
-      return (insertStableName name item table', item)
+      return (cacheInsert name item table', item)
 
 sharing :: forall s t. T s t => Tracer s t -> TracerM Value 
 sharing tracer = TracerM (sharing' tracer)
@@ -153,6 +135,13 @@ unsafeReduceTracer operand body (splat -> initvalue :: Tracer '[] t) dims = mkTr
 
 
 instance TensorOp Tracer where
+  type Ticked Tracer = Tracer'
+  ticking    = coerce
+  unticking  = Just . coerce
+  unticking' = coerce
+
+  correctShape = coerce
+
   unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeBroadcast operand idxmap@(BroadcastMap . fmap fromInteger -> _map) = 
     assert correctness $ mkTracer $ do 
@@ -456,31 +445,32 @@ instance TensorOp Tracer where
      retval $ SHLO._LogOp _operand _type 
      where _type = tensorType' (Proxy :: Proxy (Tracer s t))
 
-
-instance (Num t, T s t) => Num (Tracer s t) where
-  (+) = unsafePairwiseAdd
-  (-) = unsafePairwiseSub
-  (*) = unsafePairwiseMul
-
-  abs = unsafePairwiseAbs
-  negate = unsafePairwiseNegate
-  signum = unsafePairwiseSignum
-
-  fromInteger = splat . fromInteger
-
-instance (Fractional t, T s t) => Fractional (Tracer s t) where
-  (/) = unsafePairwiseDiv
-  fromRational = splat . fromRational
-
-instance (Floating t, T s t) => Floating (Tracer s t) where
-  pi = splat pi
-  exp = unsafePairwiseExp
-  log = unsafePairwiseLog
-  sin = unsafePairwiseSin
-  cos = unsafePairwiseCos
-
-
-
+  unsafeArgmax :: forall s s' t. (T s t, T s' t, Ord t) => Tracer s t -> Int -> Tracer s' Int64
+  unsafeArgmax operand axis = mkTracer $ do 
+    _operand <- sharing operand
+    _indices <- sharing indices
+    _startOp <- sharing startOp
+    _startId <- sharing startId
+    retval $ (!! 1) <$> SHLO._ReduceOp redims [_operand, _indices, _startOp, _startId] (do 
+      blk0 <- blockGet [tensorType' (Proxy :: Proxy (Tracer '[] t)), tensorType' (Proxy :: Proxy (Tracer '[] Int64)),
+                        tensorType' (Proxy :: Proxy (Tracer '[] t)), tensorType' (Proxy :: Proxy (Tracer '[] Int64))]
+      blockDef blk0 $ do 
+        lhsVal <- blockArg 0
+        lhsIdx <- blockArg 1
+        rhsVal <- blockArg 2
+        rhsIdx <- blockArg 3
+        lhGTrh <- SHLO._CompareOp ComparisonDirectionGT Nothing lhsVal rhsVal $ tensorType' (Proxy :: Proxy (Tracer '[] Bool))
+        lhEQrh <- SHLO._CompareOp ComparisonDirectionEQ Nothing lhsVal rhsVal $ tensorType' (Proxy :: Proxy (Tracer '[] Bool))
+        val   <- SHLO._SelectOp lhGTrh lhsVal rhsVal $ tensorType' (Proxy :: Proxy (Tracer '[] t))
+        idx'  <- SHLO._SelectOp lhGTrh lhsIdx rhsIdx $ tensorType' (Proxy :: Proxy (Tracer '[] Int64))
+        idx'' <- SHLO._MaxOp lhsIdx rhsIdx $ tensorType' (Proxy :: Proxy (Tracer '[] Int64))
+        idx   <- SHLO._SelectOp lhEQrh idx'' idx' $ tensorType' (Proxy :: Proxy (Tracer '[] Int64))
+        SHLO._ReturnOp [val, idx]
+        ) [tensorType' (Proxy :: Proxy (Tracer s' t)), tensorType' (Proxy :: Proxy (Tracer s' Int64))]
+    where indices :: Tracer  s  Int64 = unsafeIota $ fromIntegral axis
+          startOp :: Tracer '[] t     = splat maxIdent
+          startId :: Tracer '[] Int64 = splat (-1)
+          redims = ReduceDims [fromIntegral axis]
 
 class JNT (r :: Z) where
   fromTracer :: Tracer s t -> r s t

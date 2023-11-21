@@ -9,10 +9,10 @@ import HAX.AD
 type R = Target (Reverse Tracer) 
 
 test1 :: R '[5, 5] Float -> R '[] Float 
-test1 = l2Loss
+test1 = mse 0
 
 test1'  = jit test1
-test1g' = jit $ rgrad test1
+test1g' = jit $ grad test1
 
 gd :: Word -> Tensor '[5, 5] Float -> IO (Tensor '[5, 5] Float)
 gd 0 x = return x

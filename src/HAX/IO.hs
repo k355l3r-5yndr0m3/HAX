@@ -31,7 +31,7 @@ class Pixel t => ImageLoader t where
 data IDXDataType = IDXUnsignedByte | IDXSignedByte | IDXShort | IDXInt | IDXFloat | IDXDouble deriving Enum
 
 -- TODO: Implement more failure condition
-readIDXFile :: FilePath -> IO (Maybe AnyTsr)
+readIDXFile :: FilePath -> IO (Maybe Tensor')
 readIDXFile filepath = withBinaryFile filepath ReadMode (\handle -> do  
   (rank, datatype) <- allocaArray 4 (\magic -> do 
     _ <- hGetBuf handle (magic :: Ptr Word8) 4
@@ -50,7 +50,7 @@ readIDXFile filepath = withBinaryFile filepath ReadMode (\handle -> do
   bool (
     case datatype of 
       Nothing -> return Nothing 
-      Just dt -> Just . AnyTsr <$> do 
+      Just dt -> Just . Tensor' <$> do 
         let elemcount = product shape
         buffer :: Ptr () <- case dt of 
           IDXUnsignedByte -> readToBuffer handle elemcount (id :: Word8  -> Word8)
@@ -74,7 +74,7 @@ readIDXFile filepath = withBinaryFile filepath ReadMode (\handle -> do
           sequence_ [pokeElemOff buffer i . fromBE =<< peekElemOff buffer i | i <- [0..elemcount - 1]]
           return $ castPtr buffer
 
-readIDXFile' :: FilePath -> IO AnyTsr 
+readIDXFile' :: FilePath -> IO Tensor' 
 readIDXFile' filepath = fromMaybe (error $ filepath ++ " is not an idx file or an invalid idx file") <$> readIDXFile filepath
 
 --Dataset 

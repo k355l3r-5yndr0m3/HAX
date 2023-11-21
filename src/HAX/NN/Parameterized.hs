@@ -1,99 +1,74 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE UndecidableInstances #-}
 module HAX.NN.Parameterized where
+import Data.Proxy
+import HAX.Utils
 
+import HAX.NN.Model
 import HAX.Tensor
-import HAX.AD
+import HAX.PjRt (defaultDevice)
 
-import Data.Kind
-
-import GHC.TypeLits
+import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.Generics
+import GHC.TypeLits
 
-class (GradIn p, Jitter p) => Parameterized p where
-  type Input  p b
-  type Output p a
-  type Constr p a b :: Constraint
-  feed :: (Constr p a b, a ~ Input p b, b ~ Output p a) => p -> a -> b
+import System.Random.Stateful
 
-newtype Dense (r :: Z) t (i :: Nat) (o :: Nat) = Dense (r [i, o] t, r '[o] t) deriving Generic
-instance (GNT r, KnownNat i, KnownNat o, Tensorial t) => GradIn (Dense r t i o) where
-  type GradI (Dense r t i o) = Dense (Ins r) t i o
-instance (JNT r, KnownNat i, KnownNat o, Tensorial t) => Jitter (Dense r t i o) where
-  type JitT (Dense r t i o) = Dense Tensor t i o
-instance (TensorOp r, KnownNat i, KnownNat o, Tensorial t, Num t, JNT r, GNT r) => Parameterized (Dense r t i o) where
-  type Input  (Dense r t i o) _ = r '[i] t
-  type Output (Dense r t i o) _ = r '[o] t
-  type Constr (Dense r t i o) _ _ = ()
-  feed (Dense (weights, biases)) feats = biases `unsafePairwiseAdd` linearMap weights feats
+class Parameter p where
+  step :: Double -> p -> p -> p
+  default step :: (Generic p, GParameter (Rep p)) => Double -> p -> p -> p
+  step size (from -> p) (from -> p') = to (gStep size p p')
+  randM :: StatefulGen g m => g -> m p
+  default randM :: (Generic p, GParameter (Rep p), StatefulGen g m) => g -> m p
+  randM key = to <$> gRandM key
 
-data Reshape (r :: Z) t (i :: Shape) (o :: Shape) = Reshape deriving Generic
-instance (GNT r, Tensorial t, KnownShape i, KnownShape o) => GradIn (Reshape r t i o) where
-  type GradI (Reshape r t i o) = Reshape (Ins r) t i o
-instance (JNT r, Tensorial t, KnownShape i, KnownShape o) => Jitter (Reshape r t i o) where
-  type JitT (Reshape r t i o) = Reshape Tensor t i o
-instance (TensorOp r, Tensorial t, KnownShape i, KnownShape o, JNT r, GNT r, Reshapable i o) => Parameterized (Reshape r t i o) where 
-  type Input  (Reshape r t i o) _ = r i t
-  type Output (Reshape r t i o) _ = r o t
-  type Constr (Reshape r t i o) _ _ = ()
-  feed _ = reshape
+  rand :: RandomGen g => g -> p
+  rand g = runStateGen_ g randM
 
-data Sigmoid (r :: Z) t (s :: Shape) = Sigmoid deriving Generic
-instance (JNT r, T s t) => Jitter (Sigmoid r t s) where
-  type JitT (Sigmoid r t s) = Sigmoid Tensor t s
-instance (GNT r, T s t) => GradIn (Sigmoid r t s) where
-  type GradI (Sigmoid r t s) = Sigmoid (Ins r) t s 
-instance (T s t, Floating (r s t), JNT r, GNT r) => Parameterized (Sigmoid r t s) where
-  type Input  (Sigmoid r t s) _ = r s t
-  type Output (Sigmoid r t s) _ = r s t
-  type Constr (Sigmoid r t s) _ _ = ()
-  feed _ = sigmoid
+class GParameter f where 
+  gStep :: Double -> f x -> f x -> f x
+  gRandM :: StatefulGen g m => g -> m (f x)
+instance GParameter V1 where
+  gStep _ x _ = x
+  gRandM _ = return undefined
+instance GParameter U1 where
+  gStep _ x _ = x
+  gRandM _ = return U1
+instance TypeError (Text "Cannot handle Parameter type with multiple data constructors") => GParameter (a :+: b) where
+  gStep = undefined
+  gRandM = undefined
+instance (GParameter f, GParameter g) => GParameter (f :*: g) where 
+  gStep size (f :*: g) (f' :*: g') = gStep size f f' :*: gStep size g g'
+  gRandM key = do 
+    f <- gRandM key 
+    g <- gRandM key 
+    return $ f :*: g
+instance Parameter c => GParameter (K1 i c) where
+  gStep size (K1 c) (K1 c') = K1 $ step size c c'
+  gRandM key = K1 <$> randM key
+instance GParameter f => GParameter (M1 i t f) where
+  gStep size (M1 f) (M1 f') = M1 $ gStep size f f'
+  gRandM key = M1 <$> gRandM key
 
-data ReLU (r :: Z) t (s :: Shape) = ReLU deriving Generic
-instance (JNT r, T s t) => Jitter (ReLU r t s) where
-  type JitT (ReLU r t s) = ReLU Tensor t s
-instance (GNT r, T s t) => GradIn (ReLU r t s) where
-  type GradI (ReLU r t s) = ReLU (Ins r) t s 
-instance (TensorOp r, T s t, JNT r, GNT r) => Parameterized (ReLU r t s) where
-  type Input  (ReLU r t s) b = b
-  type Output (ReLU r t s) a = a
-  type Constr (ReLU r t s) a b = (a ~ r s t, b ~ r s t, Num (r s t))
-  feed _ = relu
+instance T s t => Parameter (Tensor s t) where
+  step = updateParameter
+  randM key = do
+    createBuffer <- tensorialUniformM nelem key
+    return $ unsafePerformIO $ do 
+      buffer <- createBuffer 
+      tensorFromHostBufferGC defaultDevice buffer
+    where nelem = product $ fromInteger <$> shapeVal (Proxy :: Proxy s)
 
-newtype LeakyReLU (r :: Z) t (s :: Shape) = LeakyReLU Rational deriving Generic
-instance (JNT r, T s t) => Jitter (LeakyReLU r t s) where
-  type JitT (LeakyReLU r t s) = LeakyReLU Tensor t s
-instance (GNT r, T s t) => GradIn (LeakyReLU r t s) where
-  type GradI (LeakyReLU r t s) = LeakyReLU (Ins r) t s
-instance (T s t, TensorOp r, Fractional t, Num (r s t), JNT r, GNT r) => Parameterized (LeakyReLU r t s) where
-  type Input  (LeakyReLU r t s) _ = r s t
-  type Output (LeakyReLU r t s) _ = r s t
-  type Constr (LeakyReLU r t s) _ _ = ()
-  feed (LeakyReLU alpha) = leakyrelu $ splat $ fromRational alpha
+instance (Parameter a, Parameter b) => Parameter (a, b)
+instance (Parameter a, Parameter b) => Parameter (a <&> b)
+instance (Tensorial t, KnownNat i, KnownNat o) => Parameter (Dense Tensor t i o)
+instance Parameter (Reshape a b)
+instance Parameter Sigmoid
+instance Parameter ReLU
+instance Parameter Softmax
 
-instance (Jitter a, Jitter b) => Jitter (a >> b) where
-  type JitT (a >> b) = JitT a >> JitT b
-instance (GradIn a, GradIn b) => GradIn (a >> b) where
-  type GradI (a >> b) = GradI a >> GradI b
-instance (Parameterized f, Parameterized g) => Parameterized (f >> g) where
-  type Input  (f >> g) b = Input f (Input g b)
-  type Output (f >> g) a = Output g (Output f a)
-  type Constr (f >> g) a b = (Constr f a (Output f a), Output f a ~ Input g b, Constr g (Input g b) b)
-
-  feed (f :>: g) = feed g . feed f
-instance (Jitter a, Jitter b) => Jitter (a !! b) where
-  type JitT (a !! b) = JitT a !! JitT b
-instance (GradIn a, GradIn b) => GradIn (a !! b) where
-  type GradI (a !! b) = GradI a !! GradI b
-instance (Parameterized f, Parameterized g) => Parameterized (f !! g) where 
-  type Input  (f !! g) b = Input f b
-  type Output (f !! g) a = Output g a
-  type Constr (f !! g) a b = (Constr f a b, Input g b ~ a, b ~ Output f a, Constr g a b, Num b)
-
-  feed (f :!: g) x = feed f x + feed g x
-
-data a >> b = a :>: b deriving Generic
-infixr 9 >>, :>:
-data a !! b = a :!: b deriving Generic
-infixr 9 !!, :!:
+instance (Parameter f, Parameter g) => Parameter (f >> g)
+instance (Parameter f, Parameter g) => Parameter (f !! g)

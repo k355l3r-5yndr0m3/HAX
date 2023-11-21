@@ -27,5 +27,4 @@ tensorUniformRM r g = do
 
 tensorUniformR :: (RandomGen g, UniformRange (StorageType t), T s t) => (t, t) -> g -> (Tensor s t, g)
 tensorUniformR r g = runStateGen g (tensorUniformRM r)
-
 -- TODO: Implement random for <+>

@@ -16,7 +16,7 @@ model :: Target (Reverse Tracer) '[128] Float -> Target (Reverse Tracer) '[] Flo
 model x a b = vmap (\x' -> x' * a + b) x
 
 loss :: Target (Reverse Tracer) '[128] Float -> Target (Reverse Tracer) '[] Float -> Target (Reverse Tracer) '[] Float -> Target (Reverse Tracer) '[128] Float -> Target (Reverse Tracer) '[] Float
-loss x a b y = l2Loss (y - model x a b)
+loss x a b = mse (model x a b)
 
 loss' :: Tensor '[128] Float
               -> Tensor '[] Float
@@ -26,10 +26,10 @@ loss' :: Tensor '[128] Float
                  <&> Tensor '[] Float
                       <&> Tensor '[] Float 
                            <&> Tensor '[128] Float
-loss' = jit $ rgrad loss
+loss' = jit $ grad loss
 
 lr :: Fractional f => f
-lr = 0.0002
+lr = 2e-2
 
 training :: [(Tensor '[128] Float, Tensor '[128] Float)]
                  -> (Tensor '[] Float, Tensor '[] Float)
@@ -37,7 +37,7 @@ training :: [(Tensor '[128] Float, Tensor '[128] Float)]
 training []          (a, b) = return (a, b)
 training ((x, y):ds) (a, b) = do 
   print (a, b)
-  training ds (a - a' * lr, b - b' * lr)
+  training ds (updateParameter lr a a', updateParameter lr b b')
   where _ :&: a' :&: b' :&: _ = loss' x a b y 
 
 main :: IO ()
@@ -46,5 +46,5 @@ main = do
       y = -4 * x + 5 + fst (tensorUniformR (-0.2, 0.2) (mkStdGen 52))
       a :: Tensor '[] Float = 1
       b :: Tensor '[] Float = -6
-  (a', b') <- training (replicate 512 (x, y)) (a, b)
+  (a', b') <- training (replicate 1024 (x, y)) (a, b)
   print (a', b')

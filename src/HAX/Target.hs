@@ -56,7 +56,8 @@ import GHC.IsList
 --  targets is fed into a binary function, they are automatically broadcasted
 -- But this is not done at the site of vmap, which assumes all the inputs feeding it have the same dims and the output has the expected dim, this can easily be solved.
 
-data Target r s t = Target [Integer] (r s t)
+data Target r s t = Target  [Integer] (r s t)
+data Target' r    = Target' [Integer] (Ticked r)
 type Transformable r = forall s s' t. Coercible (r s t) (r s' t)
 
 instance IsList (r s t) => IsList (Target r s t) where
@@ -112,6 +113,13 @@ instance (ConvertOp r, Transformable r) => ConvertOp (Target r) where
 instance (TensorOp r, Transformable r) => TensorOp (Target r) where
 --  type ShapeConstr (Target r) t = (ShapeConstr r Int64, MathConstr r Int64) 
   -- NOTE: haskell cannot determine the write method to call so this is a fix
+  type Ticked (Target r) = Target' r
+  ticking    (Target dims  (ticking    -> r)) = Target' dims r
+  unticking  (Target' dims (unticking  -> r)) = Target dims <$> r
+  unticking' (Target' dims (unticking' -> r)) = Target dims r
+
+  correctShape (Target dims (correctShape -> r)) = Target dims r
+
   unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeBroadcast (Target dim operand) _map = Target dim $ 
     reifyShape (dim ++ shapeVal (Proxy :: Proxy s0)) $ \ s0' -> 
@@ -561,28 +569,18 @@ instance (TensorOp r, Transformable r) => TensorOp (Target r) where
                 rhs' :: r _s t = coerce _rhs
             in  coerce $! isLE lhs' rhs'
 
+  unsafeArgmax :: forall s s' t. (Ord t, T s t, T s' t) => Target r s t -> Int -> Target r s' Int64
+  unsafeArgmax (Target dims operand) axis = Target dims $ 
+    reifyShape (dims ++ shapeVal (Proxy :: Proxy s)) $ \(same (scoerce operand) -> operand') -> 
+      reifyShape (dims ++ shapeVal (Proxy :: Proxy s')) $ \(same (unsafeArgmax operand' (length dims + axis)) -> result') ->
+        coerce result'
+    where same :: KnownShape g => n g c -> Proxy g -> n g c
+          same = const
+          scoerce :: (KnownShape i, KnownShape o, Coercible (x i g) (x o g)) => x i g -> x o g
+          scoerce = coerce
 
-instance (Num t, T s t, TensorOp r, Transformable r) => Num (Target r s t) where
-  (+) = unsafePairwiseAdd
-  (-) = unsafePairwiseSub
-  (*) = unsafePairwiseMul
 
-  abs = unsafePairwiseAbs
-  negate = unsafePairwiseNegate
-  signum = unsafePairwiseSignum
 
-  fromInteger = splat . fromInteger
-
-instance (Fractional t, T s t, TensorOp r, Transformable r) => Fractional (Target r s t) where
-  (/) = unsafePairwiseDiv
-  fromRational = splat . fromRational
-
-instance (Floating t, T s t, TensorOp r, Transformable r) => Floating (Target r s t) where
-  pi = splat pi
-  exp = unsafePairwiseExp
-  log = unsafePairwiseLog
-  sin = unsafePairwiseSin
-  cos = unsafePairwiseCos
 
 -- VMap transform
 class Vectorizable f where
@@ -608,11 +606,6 @@ instance (T s t, TensorOp r, Transformable r, Vectorizable f) => Vectorizable (T
 vmap :: (KnownNat i, Vectorizable (a -> b)) => (a -> b) -> Vectorized i (a -> b) 
 vmap f = vmap' [] (const f)
 
-instance (TensorOp r, T s t, Fractional t) => Grad (Target (Reverse r) s t) where
-  type GradF' (Target (Reverse r) s t) g = g
-  type GradF  _                          = TypeError (Text "rgrad must be applied to a function")
-  grad' _ recover (Target _ (R _ g)) = fst . recover . g . splat $ 1
-  grad = undefined
 
 instance JNT r => JNT (Target r) where
   fromTracer = Target [] . fromTracer
