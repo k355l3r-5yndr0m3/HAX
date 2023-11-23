@@ -23,37 +23,40 @@ import System.IO (hFlush, stdout)
 type R = Target (Reverse Tracer)
 type R' = Tracer
 type B = 125
-type FFW r t = Reshape [28, 28] '[28 * 28] >> Dense r t (28 * 28) 392 >> ReLU >> Dense r t 392 98  >> ReLU >> Dense r t 98 10 >> Softmax
+-- type FFW r t = Reshape [28, 28] '[28 * 28] >> Dense r t (28 * 28) 392 >> ReLU >> Dense r t 392 98  >> ReLU >> Dense r t 98 10 >> Softmax
+type ConvNet r t = Reshape [28, 28] [28, 28, 1] >> Convolute r t 1 [5, 5] 3 >> ReLU >> Convolute r t 3 [5, 5] 6 >> ReLU >> Convolute r t 6 [5, 5] 12 >> ReLU >>
+                   Convolute r t 12 [5, 5] 24 >> ReLU >> Convolute r t 24 [5, 5] 48 >> ReLU >> Convolute r t 48 [5, 5] 96 >> ReLU >> Convolute r t 96 [4, 4] 192 >> 
+                   Reshape [1, 1, 192] '[192] >> ReLU >> Dense r t 192 96 >> ReLU >> Dense r t 96 10 >> Softmax
 
-model :: (r ~ R, t ~ Float, KnownNat b) => FFW r t -> r [b, 28, 28] t -> r [b, 10] t
+model :: (r ~ R, t ~ Float, KnownNat b) => ConvNet r t -> r [b, 28, 28] t -> r [b, 10] t
 model params = vmap (feed params)
 
-mloss :: (r ~ R, t ~ Float, b ~ B) => FFW r t -> r [b, 28, 28] t -> r [b, 10] t -> r '[] t
+mloss :: (r ~ R, t ~ Float, b ~ B) => ConvNet r t -> r [b, 28, 28] t -> r [b, 10] t -> r '[] t
 mloss params x = (`crossEntropy` model params x)
 
-mgrad :: (r ~ R', t ~ Float, b ~ B) => FFW r t -> r [b, 28, 28] t -> r [b, 10] t -> FFW r t
+mgrad :: (r ~ R', t ~ Float, b ~ B) => ConvNet r t -> r [b, 28, 28] t -> r [b, 10] t -> ConvNet r t
 mgrad params x y = params'
   where params' :&: _ :&: _ = grad mloss params x y
 
 -- TODO: Make this less dumb
 train :: [([(Tensor [B, 28, 28] Float, Tensor [B, 10] Float)], [(Tensor [B, 28, 28] Float, Tensor '[B] Int64)])] ->
-         (FFW Tensor Float -> Tensor [B, 28, 28] Float -> Tensor [B, 10] Float -> (Tensor '[] Float, FFW Tensor Float), 
-          FFW Tensor Float -> Tensor [B, 28, 28] Float -> Tensor [B, 10] Float) ->
-          FFW Tensor Float -> IO (FFW Tensor Float)
+         (ConvNet Tensor Float -> Tensor [B, 28, 28] Float -> Tensor [B, 10] Float -> (Tensor '[] Float, ConvNet Tensor Float), 
+          ConvNet Tensor Float -> Tensor [B, 28, 28] Float -> Tensor [B, 10] Float) ->
+          ConvNet Tensor Float -> IO (ConvNet Tensor Float)
 train []     _         params = return params
 train ((trainSet, testSet):bs) (criterion, predict) params = do 
   params' <- epoch params trainSet
   let test = validate testSet params'
   putStrLn ("Epoch test: " ++ show test ++ "/10000")
   train bs (criterion, predict) params'
-  where epoch :: FFW Tensor Float -> [(Tensor [B, 28, 28] Float, Tensor [B, 10] Float)] -> IO (FFW Tensor Float)
+  where epoch :: ConvNet Tensor Float -> [(Tensor [B, 28, 28] Float, Tensor [B, 10] Float)] -> IO (ConvNet Tensor Float)
         epoch p []         = return p
         epoch p ((i, l):d) = do 
           let (loss, gradient) = criterion p i l 
           print loss
           hFlush stdout
           epoch (step 1.5e-2 p gradient) d
-        validate :: [(Tensor [B, 28, 28] Float, Tensor '[B] Int64)] -> FFW Tensor Float -> Int64
+        validate :: [(Tensor [B, 28, 28] Float, Tensor '[B] Int64)] -> ConvNet Tensor Float -> Int64
         validate []          _ = 0
         validate ((i, l):as) p =
           let l' = argmax (predict p i) (Proxy :: Proxy 1)
@@ -74,13 +77,13 @@ main = do
       testImageBatches  :: [Tensor [B, 28, 28] Float] = split testImages
       testLabelBatches  :: [Tensor '[B] Int64]        = split testLabels
 
-      params :: FFW Tensor Float = rand (mkStdGen 35)
+      params :: ConvNet Tensor Float = rand (mkStdGen 35)
       criterion = jit $ 
         let g = fgrad mloss
             x (a :&: _ :&: _) = a
         in  \p f l -> second x (g p f l)
-      predict :: (r ~ Tensor, t ~ Float, KnownNat b) => FFW r t -> r [b, 28, 28] t -> r [b, 10] t
+      predict :: (r ~ Tensor, t ~ Float, KnownNat b) => ConvNet r t -> r [b, 28, 28] t -> r [b, 10] t
       predict = jit model
-  -- _ <- train (replicate epoch (zip trainImageBatches trainLabelBatches, zip testImageBatches testLabelBatches)) (criterion, predict) params
+  _ <- train (replicate epoch (zip trainImageBatches trainLabelBatches, zip testImageBatches testLabelBatches)) (criterion, predict) params
   echoNumCompilations
   return ()

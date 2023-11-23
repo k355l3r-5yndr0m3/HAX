@@ -38,6 +38,7 @@ compile' (ins, main, outs) = atomicModifyIORef compilationCounter (\i -> (i + 1,
         blockDef bb0 $ do 
           (_, _out) <- main $ StableCache empty
           Func._ReturnOp _out
+    -- moduleDump m
     bytecode <- writeByteCode (moduleGetOperation m) 
     moduleDestroy m 
     return bytecode))

@@ -56,6 +56,7 @@ import GHC.IsList
 --  targets is fed into a binary function, they are automatically broadcasted
 -- But this is not done at the site of vmap, which assumes all the inputs feeding it have the same dims and the output has the expected dim, this can easily be solved.
 
+-- TODO: Implement dynamic type 
 data Target r s t = Target  [Integer] (r s t)
 data Target' r    = Target' [Integer] (Ticked r)
 type Transformable r = forall s s' t. Coercible (r s t) (r s' t)
@@ -409,7 +410,6 @@ instance (TensorOp r, Transformable r) => TensorOp (Target r) where
 
   unsafeIota dims = Target [] $ unsafeIota dims
   unsafeLinspace axis = Target [] . unsafeLinspace axis
-
 
   unsafePairwiseAdd :: forall s t. (T s t) => Target r s t -> Target r s t -> Target r s t
   unsafePairwiseAdd lhs rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result

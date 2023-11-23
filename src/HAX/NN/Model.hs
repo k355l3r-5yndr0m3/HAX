@@ -105,12 +105,20 @@ type family (:+) (a :: [x]) (b :: x) :: [x] where
   '[]       :+ b = '[b]
   (a ': as) :+ b = a ': (as :+ b)
 
-data Convolute (r :: Z) t (i :: Nat) (k :: Shape) (o :: Nat) = Convolute (r (i:(k :+ o)) t) (r '[o] t)
+instance (KnownNat i, KnownShape s, KnownNat o, KnownShape (s :+ o)) => NGradIn (Convolute Tensor Float i s o) where
+instance (GNT r, Tensorial t, KnownNat i, KnownShape s, KnownNat o, KnownShape (s :+ o)) => GradIn (Convolute r t i s o) where
+  type GradI (Convolute r t i s o) = Convolute (Ins r) t i s o
+instance (JNT r, Tensorial t, KnownNat i, KnownShape s, KnownNat o, KnownShape (s :+ o)) => Jitter (Convolute r t i s o) where
+  type JitT (Convolute r t i s o) = Convolute Tensor t i s o
+instance (JNT r, Tensorial t, KnownNat i, KnownShape s, KnownNat o, KnownShape (s :+ o)) => Jit (Convolute r t i s o) where
+  type JitF (Convolute r t i s o) = JitT (Convolute r t i s o)
+data Convolute (r :: Z) t (i :: Nat) (k :: Shape) (o :: Nat) = Convolute (r (i:(k :+ o)) t) (r '[o] t) deriving (Generic)
+instance (Tensorial t, KnownNat i, KnownShape s, KnownNat o, KnownShape (s :+ o)) => Show (Convolute Tensor t i s o) where
+  show (Convolute weights biases) = "Convolute " ++ show weights ++ " " ++ show biases
 type family Add (a :: Nat) (b :: Nat) :: Nat where
   Add a b = a + b
-instance (TensorOp r, Num t, Tensorial t, KnownNat i, KnownNat o) => Model (Convolute r t i '[] o) (r '[i] t) (r '[o] t) where
+instance (TensorOp r, Num t, Tensorial t, KnownNat i, KnownNat o) => Model (Convolute r t i '[] o) (r '[i] t) (r '[o] t) where -- degenerate case
   feed (Convolute weights biases) = unsafePairwiseAdd biases . linearMap weights
-
 instance (TensorOp r, Tensorial t, KnownNat i, KnownNat o, c ~ a + d - 1, d ~ c - a + 1, KnownNat c, KnownNat d, KnownNat a, 
           Model (Convolute r t i as o) (r ins t) (r out t), Num t,
           KnownShape as, KnownShape ins, KnownShape out, KnownShape (as :+ o)) => Model (Convolute r t i (a ': as) o) (r (c ': ins) t) (r (d ': out) t) where

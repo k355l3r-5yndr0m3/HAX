@@ -146,3 +146,4 @@ instance KnownShape s => NGradIn (Tensor s Word8) where
 instance KnownShape s => NGradIn (Tensor s Bool) where
   ngradIn t (f, fs) = ((f t, fmap (<*> [t]) fs), (splat False, ))
   compareGrad' _ _ = (0, 0)
+

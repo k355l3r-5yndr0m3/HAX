@@ -211,7 +211,7 @@ instance TensorOp Tracer where
     _operand <- sharing operand 
     retval $ SHLO._ReverseOp dims' _operand _type
     where _type = tensorType' (Proxy :: Proxy (Tracer s0 t))
-          dims' = DenseIntOrFPElements (VectorType [fromIntegral $ length dims] SI64) (fromInteger <$> dims :: [Int64])
+          dims' = DenseIntOrFPElements (VectorType [fromIntegral $ length dims] I64) (fromInteger <$> dims :: [Int64])
 
   splat :: forall s t. T s t => t -> Tracer s t
   splat value = mkTracer $ 

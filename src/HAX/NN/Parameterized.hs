@@ -69,6 +69,7 @@ instance Parameter (Reshape a b)
 instance Parameter Sigmoid
 instance Parameter ReLU
 instance Parameter Softmax
+instance (Tensorial t, KnownShape s, KnownNat i, KnownNat o, KnownShape (s :+ o)) => Parameter (Convolute Tensor t i s o) where
 
 instance (Parameter f, Parameter g) => Parameter (f >> g)
 instance (Parameter f, Parameter g) => Parameter (f !! g)

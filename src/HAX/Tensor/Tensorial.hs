@@ -417,11 +417,11 @@ instance Tensorial Float where
                 result _ _ = 
                   let rkernel :: r rotkern Float = unsafeTranspose (unsafeReverse g spatials) (rotate dims)
                       expad = fmap (+(-1)) kerShape
-                      inpad = fmap (+(-1)) (middle outShape)
-                      padder = (0, 0, 0):zipWith (\a b -> (a, b, a)) expad inpad ++ [(0, 0, 0)]
+                      inpad = fmap (+(-1)) (middle outShape) -- the inpad should be zero, why did I do this?
+                      padder = (0, 0, 0):zipWith (\a b -> (a, a, 0)) expad inpad ++ [(0, 0, 0)]
                       padded :: r padshape Float = unsafePad 0 i padder
-                  in  unsafeConvolution rkernel padded
-                padShape = zipWith (\a b -> (a - 1) * 2 + b) kerShape (middle outShape)
+                  in  unsafeConvolution padded rkernel
+                padShape = batchSize:zipWith (\a b -> (a - 1) * 2 + b) kerShape (middle outShape) ++ [outChann]
             in  reifyShape padShape $ reifyShape (rotate rhsShape) result
           kernelGradient :: r s1 Float
           kernelGradient =
@@ -430,6 +430,8 @@ instance Tensorial Float where
                   let rotinput :: r rotinput Float = unsafeTranspose f (rotate dims)
                   in  unsafeConvolution rotinput i
             in  reifyShape (rotate lhsShape) result
+          batchSize = assert (head lhsShape == head outShape) $ head lhsShape
+          outChann  = assert (last rhsShape == last outShape) $ last outShape
           lhsShape = shapeVal (Proxy :: Proxy s0)
           rhsShape = shapeVal (Proxy :: Proxy s1)
           outShape = shapeVal (Proxy :: Proxy s2)
