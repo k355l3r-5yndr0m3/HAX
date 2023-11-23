@@ -84,6 +84,6 @@ main = do
         in  \p f l -> second x (g p f l)
       predict :: (r ~ Tensor, t ~ Float, KnownNat b) => ConvNet r t -> r [b, 28, 28] t -> r [b, 10] t
       predict = jit model
-  _ <- train (replicate epoch (zip trainImageBatches trainLabelBatches, zip testImageBatches testLabelBatches)) (criterion, predict) params
+  -- _ <- train (replicate epoch (zip trainImageBatches trainLabelBatches, zip testImageBatches testLabelBatches)) (criterion, predict) params
   echoNumCompilations
   return ()
