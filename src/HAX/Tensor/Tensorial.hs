@@ -26,6 +26,7 @@ import Data.Int
 import Data.List
 import Data.Bifunctor
 import Data.Maybe (fromJust)
+import Data.Coerce (Coercible, coerce)
 
 import Foreign hiding (sizeOf, rotate)
 import Foreign.C (CIntPtr)
@@ -600,18 +601,30 @@ class ConvertOp (r :: Shape -> Type -> Type) where
 
 
 
+type Transformable r = forall s s' t. Coercible (r s t) (r s' t)
 type T s t = (KnownShape s, Tensorial t)
 -- The lhs (image, or volume, or whatever) is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
 --     rhs (kernel)                        is [IN FEAT DIM,  ...(SPATIAL DIM)..., OUT FEAT DIM]
 --     output                              is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
 -- This is to simplify implementation
-class Typeable r => TensorOp (r :: Shape -> Type -> Type) where
-  type Ticked r = g | g -> r
-  ticking    :: T s t => r s t -> Ticked r
-  unticking  :: T s t => Ticked r -> Maybe (r s t)
-  unticking' :: T s t => Ticked r -> r s t
 
-  correctShape :: r s t -> r s' t -- only change the type, does nothing to the underlying data
+forceShape :: [Integer] -> (forall s. KnownShape s => r s t) -> (forall s. KnownShape s => r s t -> a) -> a
+forceShape shape value func = reifyShape shape $ \(same value -> value') -> func value'
+  where same :: KnownShape s => r s t -> Proxy s -> r s t
+        same = const
+
+showShape :: forall r s t. KnownShape s => r s t -> String
+showShape _ = show (shapeVal (Proxy :: Proxy s))
+
+class (Transformable r, Typeable r) => TensorOp (r :: Shape -> Type -> Type) where
+  assumeEqShape :: forall s s' t. (KnownShape s, KnownShape s') => r s t -> r s' t -- bypass the problem where s should be s', but compiler cannot prove it
+  assumeEqShape = assert (shapeVal (Proxy :: Proxy s) == shapeVal (Proxy :: Proxy s')) coerce
+
+  assumeShape   :: r s t -> Proxy s' -> r s' t
+  assumeShape = const . coerce
+
+  coerceShape   :: r s t -> r s' t
+  coerceShape !a = coerce a
 
   -- without type checking, internal use only
   -- TODO: Add simple constraints to the dtype, since that does not make other things more difficult

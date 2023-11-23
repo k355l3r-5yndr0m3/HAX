@@ -21,12 +21,14 @@ import GHC.IsList
 import GHC.TypeError
 import GHC.Generics
 import Data.Bifunctor (Bifunctor(first))
+import Control.Exception (assert)
+import Data.Coerce (coerce)
 
 -- TODO: Consider using coerse instead of Dynamic for gradient
 --       Slightly more safe and more performance
 -- TODO: Use pattern syn 
 -- TODO: Remove overlapping instances
-newtype Reverse  r s t = Reverse  (r s t, G r s t)         deriving Generic
+newtype Reverse  r s t = Reverse (r s t, G r s t) deriving Generic
 primal :: Reverse r s t -> r s t 
 primal (Reverse t) = fst t
 
@@ -53,6 +55,8 @@ instance ConvertOp r => ConvertOp (Reverse r) where
 -- NOTE: This is strange, this constraint require undiciable instance if Reverse is constrained to Reverse (r :: Shape -> Type -> Type) (s :: Shape) (t :: Type)
 --        Why? (More reason to do the above)
 instance TensorOp r => TensorOp (Reverse r) where
+  assumeEqShape :: forall s s' t. (KnownShape s, KnownShape s') => Reverse r s t -> Reverse r s' t
+  assumeEqShape = assert (shapeVal (Proxy :: Proxy s) == shapeVal (Proxy :: Proxy s')) coerce
 
   unsafeBroadcast (R f f') dims = R (unsafeBroadcast f dims) (unsafeBroadcastGrad f' dims)
   unsafeTranspose (R f f') perm = R (unsafeTranspose f perm) (f' . (`unsafeTranspose` perm'))

@@ -13,7 +13,6 @@ import Control.Exception
 
 import Data.Proxy
 import Data.Primitive
-import Data.Coerce
 
 import Foreign
 
@@ -27,8 +26,6 @@ import GHC.IsList
 
 
 newtype Tracer (s :: Shape) t = Tracer (StableCache Value -> BlockM (StableCache Value, Value))
-newtype Tracer' = Tracer' (StableCache Value -> BlockM (StableCache Value, Value))
-
 newtype TracerM a = TracerM (StableCache Value -> BlockM (StableCache Value, a))
 instance Functor TracerM where
   fmap f (TracerM a) = TracerM $ \ t0 -> do 
@@ -135,13 +132,6 @@ unsafeReduceTracer operand body (splat -> initvalue :: Tracer '[] t) dims = mkTr
 
 
 instance TensorOp Tracer where
-  type Ticked Tracer = Tracer'
-  ticking    = coerce
-  unticking  = Just . coerce
-  unticking' = coerce
-
-  correctShape = coerce
-
   unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeBroadcast operand idxmap@(BroadcastMap . fmap fromInteger -> _map) = 
     assert correctness $ mkTracer $ do 

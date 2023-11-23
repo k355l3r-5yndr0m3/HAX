@@ -32,6 +32,7 @@ import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.TypeError
 import GHC.IsList
 import GHC.Generics
+import Control.Exception (assert)
 
 
 newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
@@ -149,12 +150,8 @@ instance ConvertOp Tensor where
   convert = jitT convert
 
 instance TensorOp Tensor where
-  type Ticked Tensor = Tensor'
-  ticking    = coerce
-  unticking  = toTensor
-  unticking' = fromJust . toTensor
-
-  correctShape = coerce
+  assumeEqShape :: forall s s' t. (KnownShape s, KnownShape s') => Tensor s t -> Tensor s' t
+  assumeEqShape = assert (shapeVal (Proxy :: Proxy s) == shapeVal (Proxy :: Proxy s')) coerce
 
   unsafeBroadcast operand dims = jitT (`unsafeBroadcast` dims) operand
   unsafeTranspose operand perm = jitT (`unsafeTranspose` perm) operand

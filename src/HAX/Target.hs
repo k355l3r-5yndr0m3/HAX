@@ -3,6 +3,7 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE PatternSynonyms #-}
 module HAX.Target where
 import HAX.Tensor
 
@@ -21,6 +22,7 @@ import Stablehlo.Dialect.Stablehlo.Attributes
 import GHC.TypeLits
 import Data.Int (Int64)
 import GHC.IsList
+import Debug.Trace (trace)
 
 -- Target: represent the target of vmap transformation
 --         Target dims r 
@@ -57,16 +59,17 @@ import GHC.IsList
 -- But this is not done at the site of vmap, which assumes all the inputs feeding it have the same dims and the output has the expected dim, this can easily be solved.
 
 -- TODO: Implement dynamic type 
-data Target r s t = Target  [Integer] (r s t)
-data Target' r    = Target' [Integer] (Ticked r)
-type Transformable r = forall s s' t. Coercible (r s t) (r s' t)
+newtype Target r s t = Tgt ([Integer], r s t)
+pattern Target :: [Integer] -> r s t -> Target r s t
+pattern Target d r = Tgt (d, r)
+{-# COMPLETE Target #-}
 
 instance IsList (r s t) => IsList (Target r s t) where
   type Item (Target r s t) = Item (r s t)
 
   fromList = Target [] . fromList
 
-capture :: forall r s t. (T s t, TensorOp r, Transformable r) => Target r s t -> [Integer] -> r s t 
+capture :: forall r s t. (T s t, TensorOp r) => Target r s t -> [Integer] -> r s t 
 capture (Target di u) dmax 
   | di == dmax = u
   | otherwise  = assert (di `isSuffixOf` dmax) $
@@ -80,6 +83,13 @@ capture (Target di u) dmax
               t1 :: r s1 t = unsafeBroadcast t0 mapping
           in  coerce $! t1
         mapping = fromIntegral <$> take (length src) [length dst - length src..]
+capture' :: forall r s t a. (TensorOp r, T s t) => Target r s t -> [Integer] -> (forall s'. KnownShape s' => r s' t -> a) -> a
+capture' (Target di u) dm func
+  | di == dm  = forceShape src (coerce u) func
+  | otherwise = assert (di `isSuffixOf` dm) (forceShape src (coerce u) (\u' -> forceShape dst (unsafeBroadcast u' m) func))
+  where m = fromIntegral <$> take (length src) [length dst - length src..]
+        src = di ++ shapeVal (Proxy :: Proxy s)
+        dst = dm ++ shapeVal (Proxy :: Proxy s)
 
 binary :: (T s0 t0, T s1 t1, Transformable r, TensorOp r) => Target r s0 t0 -> Target r s1 t1 -> ([Integer], r s0 t0, r s1 t1)
 binary l@(Target ld lhs) r@(Target rd rhs) 
@@ -91,6 +101,10 @@ binary l@(Target ld lhs) r@(Target rd rhs)
     let rhs' = capture r ld 
     in  (ld, lhs, rhs')
   | otherwise = error $ "The impossible has happen: " ++ show ld ++ " vs " ++ show rd 
+binary' :: (TensorOp r, T s0 t0, T s1 t1) => Target r s0 t0 -> Target r s1 t1 -> (forall s0' s1'. (KnownShape s0', KnownShape s1') => [Integer] -> r s0' t0 -> r s1' t1 -> a) -> a
+binary' a@(Target da _) b@(Target db _) func = capture' b dm (capture' a dm (func dm))
+  where dm | length da < length db = db 
+           | otherwise             = da
 
 tertiary :: (T s0 t0, T s1 t1, T s2 t2, Transformable r, TensorOp r) => Target r s0 t0 -> Target r s1 t1 -> Target r s2 t2 -> ([Integer], r s0 t0, r s1 t1, r s2 t2)
 tertiary a@(Target ad _) b@(Target bd _) c@(Target cd _) = (dims, capture a dims, capture b dims, capture c dims)
@@ -111,15 +125,12 @@ instance (ConvertOp r, Transformable r) => ConvertOp (Target r) where
           scoerce :: Coercible (r a b) (r c b) => r a b -> r c b
           scoerce = coerce 
 
+-- These implementation are horriable
 instance (TensorOp r, Transformable r) => TensorOp (Target r) where
 --  type ShapeConstr (Target r) t = (ShapeConstr r Int64, MathConstr r Int64) 
   -- NOTE: haskell cannot determine the write method to call so this is a fix
-  type Ticked (Target r) = Target' r
-  ticking    (Target dims  (ticking    -> r)) = Target' dims r
-  unticking  (Target' dims (unticking  -> r)) = Target dims <$> r
-  unticking' (Target' dims (unticking' -> r)) = Target dims r
-
-  correctShape (Target dims (correctShape -> r)) = Target dims r
+  
+  --correctShape (Target dims (correctShape -> r)) = Target dims r
 
   unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Target r s0 t -> [Integer] -> Target r s1 t
   unsafeBroadcast (Target dim operand) _map = Target dim $ 
@@ -412,10 +423,8 @@ instance (TensorOp r, Transformable r) => TensorOp (Target r) where
   unsafeLinspace axis = Target [] . unsafeLinspace axis
 
   unsafePairwiseAdd :: forall s t. (T s t) => Target r s t -> Target r s t -> Target r s t
-  unsafePairwiseAdd lhs rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
-    where (dim, _lhs, _rhs) = binary lhs rhs
-          result :: forall s'. KnownShape s' => Proxy s' -> r s t 
-          result _ = coerce $! (coerce _lhs `unsafePairwiseAdd` coerce _rhs :: r s' t)
+  unsafePairwiseAdd lhs rhs = binary' lhs rhs (\dims lhs' rhs' -> 
+    Target dims $ coerce $ unsafePairwiseAdd lhs' (assumeEqShape rhs'))
 
   unsafePairwiseSub :: forall s t. (T s t) => Target r s t -> Target r s t -> Target r s t
   unsafePairwiseSub lhs rhs = Target dim $ reifyShape (dim ++ shapeVal (Proxy :: Proxy s)) result
