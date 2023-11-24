@@ -34,19 +34,19 @@ instance (Fractional a, Fractional b) => Fractional (a <&> b) where
   recip (lhs :&: rhs) = recip lhs :&: recip rhs
   fromRational r = fromRational r :&: fromRational r
 
-newtype StableCache i = StableCache (IntMap [(forall a. StableName a -> Bool, i)])
-cacheLookup :: StableName a -> StableCache i -> Maybe i
-cacheLookup name@(hashStableName -> hash) (StableCache cache) = 
-  cache !? hash >>= search
+newtype VarTable i = VarTable (IntMap [(forall a. StableName a -> Bool, i)])
+variableLookup :: StableName a -> VarTable i -> Maybe i
+variableLookup name@(hashStableName -> hash) (VarTable variable) = 
+  variable !? hash >>= search
   where search :: [(forall b. StableName b -> Bool, i)] -> Maybe i
         search = \case 
           []                -> Nothing
           (verify, item):ls 
             | verify name   -> Just item
             | otherwise     -> search ls
-cacheInsert :: forall a i. StableName a -> i -> StableCache i -> StableCache i
-cacheInsert name@(hashStableName -> hash) item (StableCache cache) = StableCache $
-  insertWith insertion hash [(eqStableName name, item)] cache
+variableInsert :: forall a i. StableName a -> i -> VarTable i -> VarTable i
+variableInsert name@(hashStableName -> hash) item (VarTable variable) = VarTable $
+  insertWith insertion hash [(eqStableName name, item)] variable
   where insertion :: e -> [(forall n. StableName n -> Bool, i)] -> [(forall n. StableName n -> Bool, i)]
         insertion _ table = (eqStableName name, item):clear table
         clear :: [(forall n. StableName n -> Bool, i)] -> [(forall n. StableName n -> Bool, i)]
@@ -56,5 +56,14 @@ cacheInsert name@(hashStableName -> hash) item (StableCache cache) = StableCache
             | v name    -> ls
             | otherwise -> (v, i):clear ls
 
-emptyCache :: StableCache i
-emptyCache = StableCache empty
+emptyVarTable :: VarTable i
+emptyVarTable = VarTable empty
+
+
+
+
+
+
+
+
+

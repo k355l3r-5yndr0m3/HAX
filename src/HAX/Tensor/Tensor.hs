@@ -16,12 +16,14 @@ import HAX.PjRt.Plugin (ShapeInfo(..))
 import HAX.PjRt.BufferType
 import HAX.Utils
 
+import Control.Exception (assert)
+
 import Data.Proxy
 import Data.Primitive hiding (newArray)
 import Data.Kind (Type)
 import Data.Bifunctor (Bifunctor(first))
 import Data.Coerce (coerce)
-import Data.Maybe (fromJust)
+import Data.Unique
 
 import Foreign
 import Foreign.C (CIntPtr)
@@ -32,7 +34,10 @@ import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.TypeError
 import GHC.IsList
 import GHC.Generics
-import Control.Exception (assert)
+import GHC.IORef
+import Debug.Trace (trace)
+import Control.Monad.Primitive (touch)
+import GHC.StableName (makeStableName, hashStableName)
 
 
 newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
@@ -248,7 +253,7 @@ instance TypeError (Text "cannot jit this function") => JNT Tensor where
 class GJitter t where
   type GJitT t :: k -> Type
   gJitIn :: CIntPtr -> GJitT t x -> (CIntPtr, t x, [(Buffer, AnyType)])
-  gJitOut :: t x -> (StableCache Value -> BlockM (StableCache Value, [Value]), [AnyType], [Buffer] -> (GJitT t x, [Buffer]))
+  gJitOut :: t x -> (VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType], [Buffer] -> (GJitT t x, [Buffer]))
 
 instance GJitter V1 where
   type GJitT V1 = V1
@@ -308,8 +313,8 @@ class Jitter t where
   jitIn i (from -> t) = (i', t', t'')
     where (i', to -> t', t'') = gJitIn i t
 
-  jitOut :: t -> (StableCache Value -> BlockM (StableCache Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
-  default jitOut :: (Generic t, Generic (JitT t), GJitter (Rep t), Rep (JitT t) ~ GJitT (Rep t)) => t -> (StableCache Value -> BlockM (StableCache Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
+  jitOut :: t -> (VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
+  default jitOut :: (Generic t, Generic (JitT t), GJitter (Rep t), Rep (JitT t) ~ GJitT (Rep t)) => t -> (VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
   jitOut (from -> t) = (i, i', first to . i'')
     where (i, i', i'') = gJitOut t
 
@@ -371,7 +376,6 @@ type family ReverseJit f = f' | f' -> f where
   ReverseJit (a <&> b)    = ReverseJit a <&> ReverseJit b
   ReverseJit (Tensor s t) = Tracer s t
   ReverseJit Int          = Int
-
 
 -- TODO: Implement caching
 jit :: Jit f => f -> JitF f

@@ -85,7 +85,6 @@ instance TensorOp r => TensorOp (Reverse r) where
                   limt = shapeVal (Proxy :: Proxy s2) !! fromInteger dims
                   rhsSlicing = [if d == dims then (offs, limt, 1) else (0, s, 1) | (d, s) <- zip [0..] $ shapeVal (Proxy :: Proxy s1)]
 
-
   splat t = R (splat t) nograd
 
   unsafeLinspace a r = R (unsafeLinspace a r) nograd

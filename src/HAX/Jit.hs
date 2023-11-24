@@ -22,10 +22,10 @@ compilationCounter :: IORef Int
 compilationCounter = unsafePerformIO (newIORef 0)
 
 {-# NOINLINE compile #-}
-compile :: ([AnyType], StableCache Value -> BlockM (StableCache Value, [Value]), [AnyType]) -> LoadedExecutable
+compile :: ([AnyType], VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType]) -> LoadedExecutable
 compile = unsafePerformIO . compile'
 
-compile' :: ([AnyType], StableCache Value -> BlockM (StableCache Value, [Value]), [AnyType]) -> IO LoadedExecutable
+compile' :: ([AnyType], VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType]) -> IO LoadedExecutable
 compile' (ins, main, outs) = atomicModifyIORef compilationCounter (\i -> (i + 1, undefined)) >> (
   clientCompile client =<< runContextM (do
     loadDialect_ Func.dialect
@@ -36,14 +36,14 @@ compile' (ins, main, outs) = atomicModifyIORef compilationCounter (\i -> (i + 1,
                    Nothing Nothing Nothing $ do 
         bb0 <- blockGet ins 
         blockDef bb0 $ do 
-          (_, _out) <- main $ StableCache empty
+          (_, _out) <- main $ VarTable empty
           Func._ReturnOp _out
     -- moduleDump m
     bytecode <- writeByteCode (moduleGetOperation m) 
     moduleDestroy m 
     return bytecode))
 
-compileDebug :: ([AnyType], StableCache Value -> BlockM (StableCache Value, [Value]), [AnyType]) -> IO LoadedExecutable
+compileDebug :: ([AnyType], VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType]) -> IO LoadedExecutable
 compileDebug (ins, main, outs) = atomicModifyIORef compilationCounter (\i -> (i + 1, undefined)) >> (
   clientCompile client =<< runContextM (do
     loadDialect_ Func.dialect
@@ -54,7 +54,7 @@ compileDebug (ins, main, outs) = atomicModifyIORef compilationCounter (\i -> (i 
                    Nothing Nothing Nothing $ do 
         bb0 <- blockGet ins 
         blockDef bb0 $ do 
-          (_, _out) <- main $ StableCache empty
+          (_, _out) <- main $ VarTable empty
           Func._ReturnOp _out
     moduleDump m
     bytecode <- writeByteCode (moduleGetOperation m) 
@@ -68,3 +68,13 @@ echoNumCompilations :: IO ()
 echoNumCompilations = do 
   n <- getNumCompilations
   putStrLn $ "Number of compilation performed: " ++ show n
+
+
+
+
+
+
+
+
+
+

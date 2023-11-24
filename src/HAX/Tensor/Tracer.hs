@@ -25,8 +25,8 @@ import Stablehlo.Dialect.Stablehlo.Attributes
 import GHC.IsList
 
 
-newtype Tracer (s :: Shape) t = Tracer (StableCache Value -> BlockM (StableCache Value, Value))
-newtype TracerM a = TracerM (StableCache Value -> BlockM (StableCache Value, a))
+newtype Tracer (s :: Shape) t = Tracer (VarTable Value -> BlockM (VarTable Value, Value))
+newtype TracerM a = TracerM (VarTable Value -> BlockM (VarTable Value, a))
 instance Functor TracerM where
   fmap f (TracerM a) = TracerM $ \ t0 -> do 
     (t1, a') <- a t0 
@@ -53,14 +53,14 @@ mkTracer :: TracerM Value -> Tracer s t
 mkTracer (TracerM f) = Tracer f
 
 -- Some how the new jiting method produce hash collision !?
-sharing' :: forall s t. T s t => Tracer s t -> StableCache Value -> BlockM (StableCache Value, Value)
+sharing' :: forall s t. T s t => Tracer s t -> VarTable Value -> BlockM (VarTable Value, Value)
 sharing' tracer@(Tracer f) table = do 
   name <- blockRunIO (makeStableName $! tracer)
-  case cacheLookup name table of
+  case variableLookup name table of
     Just item -> return (table, item)
     Nothing   -> do 
       (table', item) <- f table
-      return (cacheInsert name item table', item)
+      return (variableInsert name item table', item)
 
 sharing :: forall s t. T s t => Tracer s t -> TracerM Value 
 sharing tracer = TracerM (sharing' tracer)

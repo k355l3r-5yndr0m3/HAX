@@ -25,14 +25,11 @@ test1rgf = jit $ grad test1
 test1ngf = ngrad $ jit test1
 
 
-
 main :: IO ()
 main = do
   let x = rand (mkStdGen 6234)
       y = rand (mkStdGen 1245)
-      a = test1ngf x y
-      b = test1rgf x y
+      a = test1rgf x y
+      b = test1ngf x y
   print (compareGrad a b)
-  
-  -- print (forceShape [2, 3, 2] (unsafeReshape (3 :: Tensor '[12] Float)) (show :: KnownShape s => Tensor s Float -> String))
   echoNumCompilations 

@@ -87,7 +87,7 @@ instance Jit ReLU where
   type JitF ReLU = JitT ReLU
 instance GradIn ReLU where
   type GradI ReLU = ReLU
-instance (TensorOp r, T s t, Num t) => Model ReLU (r s t) (r s t) where
+instance (TensorOp r, T s t, Num t, Ord t) => Model ReLU (r s t) (r s t) where
   feed _ = relu
 
 data Softmax = Softmax deriving (Generic, Show)
@@ -128,3 +128,10 @@ instance (TensorOp r, Tensorial t, KnownNat i, KnownNat o, c ~ a + d - 1, d ~ c 
           input'  = unsafeReshape input :: r (1 ': c ': ins) t
           biases' = unsafeBroadcast biases [rank - 1]
           rank    = shapeRank (Proxy :: Proxy (d ': out))
+
+
+
+
+
+
+
