@@ -25,16 +25,30 @@ import Foreign.C
 import Data.Primitive.ByteArray
 import MLIR.IR (ByteCode(..))
 
+import Paths_HAX
+import GHC.IO (unsafePerformIO)
+import System.IO (withBinaryFile, IOMode (ReadMode), hFileSize, hGetBuf)
+
+-- serialized compile operation
+-- TODO: Implement a way to config it
+{-# NOINLINE compileOptions #-}
+compileOptions :: ByteArray
+compileOptions = unsafePerformIO (do 
+  path <- getDataFileName "serialized_compile_options"
+  withBinaryFile path ReadMode (\handle -> do 
+    size      <- fromInteger <$> hFileSize handle
+    byteArray <- newPinnedByteArray size
+    let byteArrayPtr = mutableByteArrayContents byteArray
+    _ <- hGetBuf handle byteArrayPtr size
+    unsafeFreezeByteArray byteArray))
 
 foreign import ccall unsafe "client_create"
   clientCreate :: Ptr Api -> IO (Ptr Client)
-
 
 foreign import ccall unsafe "client_destroy"
   clientDestroy :: Ptr Api -> Ptr Client -> IO ()
 foreign import ccall unsafe "&client_destroy"
   clientDestroy__ptr :: FinalizerEnvPtr Api Client
-
 
 foreign import ccall unsafe "client_platform_name"
   c__clientPlatformName :: Ptr Api -> Ptr Client -> Ptr CSize -> IO CString
@@ -47,20 +61,17 @@ clientPlatformName api client = alloca $ \sizePtr -> do
 
 -- foreign import ccall unsafe "client_default_device_assignment"
 --   clientDefaultDeviceAssignment :: Ptr Api -> Ptr Client -> CInt -> CInt -> CSize -> Ptr CInt -> IO ()
-
 foreign import ccall unsafe "client_compile"
   c__clientCompile :: Ptr Api -> Ptr Client -> ByteArray# -> CSize -> Ptr Char -> CSize -> IO (Ptr LoadedExecutable)
-foreign import ccall unsafe "SerializeCompileOptions"
-  serializeCompileOptions :: Ptr CSize -> IO (Ptr ())
+-- foreign import ccall unsafe "SerializeCompileOptions"
+--   serializeCompileOptions :: Ptr CSize -> IO (Ptr ())
 clientCompile :: Ptr Api -> Ptr Client -> ByteCode -> IO (Ptr LoadedExecutable)
 clientCompile api client (ByteCode (ByteArray code)) = do
-  (a, b) <- alloca $ \ptr -> do 
-    ops <- serializeCompileOptions ptr
-    (ops, ) <$> peek ptr
-  exe <- c__clientCompile api client code codesize (castPtr a) b
-  free a
-  return exe
+  c__clientCompile api client code codesize (castPtr $ byteArrayContents (cloneByteArray compileOptions 0 compileOptionsSize)) compileOptionsSize
   where codesize = fromIntegral $ I# (sizeofByteArray# code)
+        compileOptionsSize :: Num a => a
+        compileOptionsSize = fromIntegral $ sizeofByteArray compileOptions
+
 
 
 foreign import ccall unsafe "client_addressable_devices"

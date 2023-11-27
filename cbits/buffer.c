@@ -5,7 +5,6 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-
 void buffer_destroy(PJRT_Api *api, PJRT_Buffer *buffer) { API_CALL_CATCHER(Buffer_Destroy, fatal_error, .buffer = buffer); }
 
 PJRT_Event *buffer_to_host_buffer(PJRT_Api *api, PJRT_Buffer *src, PJRT_Buffer_MemoryLayout *host_layout, void *dst, size_t *dst_size) { return API_CALL_CATCHER(Buffer_ToHostBuffer, fatal_error, .src = src, .host_layout = host_layout, .dst = dst, .dst_size = *dst_size).event; }
@@ -44,3 +43,4 @@ const int64_t *buffer_dimensions(PJRT_Api *api, PJRT_Buffer *buffer, size_t *ran
 const int32_t buffer_element_type(PJRT_Api *api, PJRT_Buffer *buffer) {
     return API_CALL_CATCHER(Buffer_ElementType, fatal_error, .buffer = buffer).type;
 }
+

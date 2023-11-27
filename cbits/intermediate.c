@@ -50,7 +50,7 @@ load_pjrt_plugin(const char *plugin_path) {
                 } else if (plugin_attrs.num_attributes > 0) {
                     printf("Plugin attributes:\n");
                     for (size_t i = 0; i < plugin_attrs.num_attributes; i++) {
-                        PJRT_NamedValue *attr = &plugin_attrs.attributes[i];
+                        const PJRT_NamedValue *attr = &plugin_attrs.attributes[i];
                         printf("  %.*s: ", (int)attr->name_size, attr->name);
                         switch (attr->type) {
                             case PJRT_NamedValue_kString:
@@ -70,6 +70,9 @@ load_pjrt_plugin(const char *plugin_path) {
                             case PJRT_NamedValue_kFloat:
                                 printf("%.0f\n", attr->float_value);
                                 break;
+                            case PJRT_NamedValue_kBool:
+                                printf("%s\n", attr->bool_value ? "true" : "false");
+                                break;
                         }
                     }
                 }
@@ -81,3 +84,5 @@ load_pjrt_plugin(const char *plugin_path) {
     }
 }
 
+
+// 

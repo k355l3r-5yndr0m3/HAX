@@ -69,12 +69,19 @@ echoNumCompilations = do
   n <- getNumCompilations
   putStrLn $ "Number of compilation performed: " ++ show n
 
+-- Since for any function, the only variance is the number of inputs and how they are distributed
+-- it is possible to map from that to an already compiled executable
+-- f :: s -> s -> [s] -> s
+-- only the length of [s] matters
+-- f :: s -> s -> '' -> s
+-- f :: s -> s -> 's' -> s
+-- f :: s -> s -> 's -> s' -> s
+-- f :: s -> s -> 's -> s -> s' -> s
+--
+--
+--
 
-
-
-
-
-
+data JitCache f where
 
 
 

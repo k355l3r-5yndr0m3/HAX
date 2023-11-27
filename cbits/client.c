@@ -26,7 +26,7 @@ const char *client_platform_name(PJRT_Api *api, PJRT_Client *client, size_t *pla
 }
 
 // Client devices
-PJRT_Device **client_addressable_devices(PJRT_Api *api, PJRT_Client *client, size_t *num_addressable_devices_out) {
+PJRT_Device *const *client_addressable_devices(PJRT_Api *api, PJRT_Client *client, size_t *num_addressable_devices_out) {
     auto result = API_CALL_CATCHER(Client_AddressableDevices, fatal_error, .client = client);
     *num_addressable_devices_out = result.num_addressable_devices;
     return result.addressable_devices;
@@ -91,15 +91,6 @@ void client_default_device_assignment(PJRT_Api *api, PJRT_Client *client, int nu
 
 
 
-
-
-
-
-
-
-
-
-
 // Special buffer creation function
 typedef struct {
     PJRT_Api *api;
@@ -134,3 +125,4 @@ PJRT_Buffer *client_buffer_from_host_buffer__gc(PJRT_Api *api, PJRT_Client *clie
     API_CALL_CATCHER(Event_OnReady, fatal_error, .event = result.done_with_host_buffer, free_host_buffer_callback, .user_arg = arg);
     return result.buffer;
 }
+

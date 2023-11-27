@@ -219,29 +219,29 @@ main = do
 
   let e = jit test10
   print $ e 1
-
-
+  
+  
   print ([fromRational i + fromRational j | i <- [0.0..6.0], j <- [-5.0..9.0]] :: [Tensor '[12] Float])
-
+  
   --traceDebug test21
   --traceDebugGrad test21
   --traceDebug test22
   --traceDebugGrad test22
-
+  
   --traceDebug test23
-
+  
   --traceDebug test24
   --traceDebugGrad test24
-
+  
   print ([[True, False], [False, True]] :: Tensor '[2, 2] Bool)
   let t24 = jit test24
   print $ t24 [[0, 4, 2, 5], [1, -3, -4, -5]] [[0, -1, -5, -3], [4, 2, 5, 6]] (splat False)
-
+  
   --traceDebug test25
   --traceDebug test26
-
-
-
+  
+  
+  
   print (linspace (Proxy :: Proxy 0) (0, 1) :: Tensor '[5] Float)
   
   print (jit test27 [[0, 4, 3, 1, 5],
@@ -250,7 +250,7 @@ main = do
                      [3, 3, 7, 3, 5],
                      [3, 5, 7, 2, 5]] 
                      [9, 9, 9, 9, 9])
-
+  
   print (jit test28 0 (1 + unsafeIota 0))
   print (jit test29 0 (1 + unsafeIota 0))
   
@@ -264,6 +264,8 @@ main = do
 
 
 
-  clientDestroy client
+  -- OK: clientDestroy now fuck something up, how
+  -- echoNumCompilations worked, so how does this work?
+  -- clientDestroy client
   echoNumCompilations
   return ()

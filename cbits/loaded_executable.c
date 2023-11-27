@@ -14,7 +14,7 @@ loaded_executable_destroy(PJRT_Api *api, PJRT_LoadedExecutable *executable) {
 void
 loaded_executable_execute(PJRT_Api *api, PJRT_LoadedExecutable *executable,
                           PJRT_ExecuteOptions *options,
-                          PJRT_Buffer ***argument_lists,
+                          PJRT_Buffer *const *const *argument_lists, // PJRT_Buffer ***argument_lists,
                           size_t num_devices, size_t num_args,
                           PJRT_Buffer*** output_lists,
                           PJRT_Event** device_complete_events,
@@ -35,7 +35,7 @@ loaded_executable_execute(PJRT_Api *api, PJRT_LoadedExecutable *executable,
 void 
 loaded_executable_execute__1_await(PJRT_Api *api, PJRT_LoadedExecutable *executable, 
                                    PJRT_ExecuteOptions *options, 
-                                   PJRT_Buffer **argument_list, 
+                                   PJRT_Buffer *const *argument_list, 
                                    size_t num_args, 
                                    PJRT_Buffer **output_list, 
                                    PJRT_Device *execute_device) {
