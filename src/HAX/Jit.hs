@@ -13,6 +13,7 @@ import qualified MLIR.Dialect.Func           as Func
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 
 import Data.IORef
+import Data.Kind
 import GHC.IO.Unsafe (unsafePerformIO)
 
 import Data.IntMap.Strict
@@ -80,8 +81,6 @@ echoNumCompilations = do
 --
 --
 --
-
-data JitCache f where
 
 
 
