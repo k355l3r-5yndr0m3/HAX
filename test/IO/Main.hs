@@ -1,7 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE OverloadedLists #-}
 module Main (main) where
 
 import Codec.Picture
@@ -13,7 +12,6 @@ import Data.Maybe (fromJust)
 main :: IO ()
 main = do
   either putStrLn (\(tensorFromImage . convertRGB8 -> image :: Tensor [256, 256, 3] Word8) -> do
-    print image
     writePng "test/data/output-image.png" (imageFromTensor image)) =<< readImage "test/data/image.jpg"  
   maybe (putStrLn "Failed to read idx") (\(fromJust . toTensor -> img :: Tensor [60000,28,28] Word8) -> 
     let img' :: Tensor [28, 28] Word8 = reshape $ img @% 59999

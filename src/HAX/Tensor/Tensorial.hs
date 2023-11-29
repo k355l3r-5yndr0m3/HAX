@@ -890,3 +890,60 @@ type family Argmax (a :: Shape) (d :: Nat) :: Shape where
 
 argmax :: (TensorOp r, T s t, Ord t, KnownNat axis, s' ~ Argmax s axis, T s' Int64) => r s t -> Proxy axis -> r s' Int64
 argmax operand = unsafeArgmax operand . fromIntegral . natVal
+
+foldlSplit :: forall r s s' t a. (TensorOp r, T s t, T s' t, Split s s') => (a -> r s' t -> a) -> a -> r s t -> a
+foldlSplit func inital operand = 
+  if operandShape == sliceShape then 
+    func inital (assumeEqShape operand) 
+  else 
+    assert (differByOne operandShape sliceShape) (foldl (\accum slice -> func accum (unsafeSlice operand slice)) inital [slicing i | i <- [0..nstep - 1]])
+  where operandShape = shapeVal (Proxy :: Proxy s )
+        sliceShape   = shapeVal (Proxy :: Proxy s')
+        differByOne (a:as) (b:bs) 
+          | a == b    = differByOne as bs 
+          | otherwise = as == bs
+        differByOne _ _ = False
+        differAxis lhs rhs = 
+          let differAxis' i (a:as) (b:bs)
+                | a == b    = differAxis' (i + 1) as bs 
+                | otherwise = i
+              differAxis' _ _ _ = undefined
+          in  differAxis' 0 lhs rhs
+        splitAxis = differAxis operandShape sliceShape
+        operandDim = operandShape !! splitAxis
+        sliceDim   = sliceShape   !! splitAxis
+        nstep      = operandDim `div` sliceDim
+        rank       = length operandShape
+        slicing i  = zipWith (\a o -> if a == splitAxis then (i * sliceDim, (i + 1) * sliceDim, 1) else (0, o, 1)) [0..rank - 1] operandShape
+
+determindSpliting :: [Integer] -> [Integer] -> [[(Integer, Integer, Integer)]]
+determindSpliting op sl = 
+  let axis = differAxis op sl
+      odim = op !! axis
+      sdim = sl !! axis
+      step = odim `div` sdim
+      rank = length op
+      slicing i = zipWith (\a o -> if a == axis then (i * sdim, (i + 1) * sdim, 1) else (0, o, 1)) [0..rank - 1] op
+  in  map slicing [0..step - 1]
+  where differAxis lhs rhs = 
+          let differAxis' i (a:as) (b:bs)
+                | a == b    = differAxis' (i + 1) as bs 
+                | otherwise = if as == bs then i else error "Invalid shapes for spliting"
+              differAxis' _ _ _ = error "Invalid shapes for spliting"
+          in  differAxis' 0 lhs rhs
+
+foldlSplit2 :: forall r s0 s1 s0' s1' t a. (TensorOp r, T s0 t, T s0' t, T s1 t, T s1' t, Split s0 s0', Split s1 s1') => (a -> r s0' t -> r s1' t -> a) -> a -> r s0 t -> r s1 t -> a
+foldlSplit2 func inital lhs rhs = 
+  if lhsShape == lhsShape' && rhsShape == rhsShape' then
+    func inital (assumeEqShape lhs) (assumeEqShape rhs)
+  else
+    foldl (\accum (ls, rs) -> 
+      let l = unsafeSlice lhs ls
+          r = unsafeSlice rhs rs
+      in  func accum l r) inital (zip lhs' rhs')
+  where lhsShape  = shapeVal (Proxy :: Proxy s0)
+        rhsShape  = shapeVal (Proxy :: Proxy s1)
+        lhsShape' = shapeVal (Proxy :: Proxy s0') 
+        rhsShape' = shapeVal (Proxy :: Proxy s1') 
+        lhs' = determindSpliting lhsShape lhsShape'
+        rhs' = determindSpliting rhsShape rhsShape'

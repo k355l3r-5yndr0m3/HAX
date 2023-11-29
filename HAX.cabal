@@ -208,3 +208,13 @@ test-suite HAX-compilation-test
     build-depends:    base,
                       HAX,
 
+
+test-suite HAX-memory-test
+    import:           warnings 
+    default-language: GHC2021
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test/memory
+    main-is:          Main.hs 
+    build-depends:    base,
+                      HAX,
+
