@@ -76,7 +76,7 @@ instance ConvertOp Tracer where
   convert operand = mkTracer $ do 
     _operand <- sharing operand 
     retval $ SHLO._ConvertOp _operand _type 
-    where _type = tensorType' (Proxy :: Proxy (Tracer s g))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s g)
 
 -- ShapeOp
 newtype BroadcastMap = BroadcastMap [Word64]
@@ -126,10 +126,9 @@ unsafeReduceTracer operand body (splat -> initvalue :: Tracer '[] t) dims = mkTr
       _arg1 <- blockArg 1 
       _out  <- body _arg0 _arg1 scalar 
       SHLO._ReturnOp [_out]) [_type]
-  where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+  where _type = tensorTypeOf (Biproxy :: Biproxy s1 t)
         _dims = ReduceDims (fromInteger <$> dims)
-        scalar = tensorType' (Proxy :: Proxy (Tracer '[] t))
-
+        scalar = tensorTypeOf (Biproxy :: Biproxy '[] t)
 
 instance TensorOp Tracer where
   unsafeBroadcast :: forall s0 s1 t. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
@@ -145,7 +144,7 @@ instance TensorOp Tracer where
                 src = shapeVal (Proxy :: Proxy s0)
                 dst = shapeVal (Proxy :: Proxy s1)
             in  isUnique idxmap && src == fmap (dst !!) (fromInteger <$> idxmap)
-          _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+          _type = tensorTypeOf (Biproxy :: Biproxy s1 t)
 
   unsafeTranspose :: forall s0 s1 t. (T s0 t, T s1 t) => Tracer s0 t -> [Integer] -> Tracer s1 t
   unsafeTranspose operand perm = assert correctness $ mkTracer $ do 
@@ -154,7 +153,7 @@ instance TensorOp Tracer where
       return _operand 
     else 
       retval $ SHLO._TransposeOp attr _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s1 t)
           correctness = 
             let uniqueness :: [Integer] -> Bool
                 uniqueness []     = True
@@ -172,7 +171,7 @@ instance TensorOp Tracer where
     else
       retval $ SHLO._ReshapeOp _operand _type
     where correctness = product (shapeVal (Proxy :: Proxy s0)) == product (shapeVal (Proxy :: Proxy s1))
-          _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+          _type = tensorTypeOf (Biproxy :: Biproxy s1 t)
           operandShape = shapeVal (Proxy :: Proxy s0)
           resultShape  = shapeVal (Proxy :: Proxy s1)
 
@@ -180,7 +179,7 @@ instance TensorOp Tracer where
   unsafeSlice operand slicing = mkTracer $ do
     _operand <- sharing operand
     retval $ SHLO._SliceOp (mkVec starts) (mkVec limits) (mkVec strides) _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s1 t)
           (starts, limits, strides) = unzip3 slicing
           mkVec :: [Integer] -> DenseIntOrFPElements (VectorType IntegerType) [Int64]
           mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] I64) (fromIntegral <$> vec)
@@ -190,7 +189,7 @@ instance TensorOp Tracer where
     _operand <- sharing operand 
     _value   <- sharing value
     retval $ SHLO._PadOp (mkVec lower) (mkVec higher) (mkVec interior) _operand _value _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s1 t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s1 t)
           (lower, higher, interior) = unzip3 padding
           mkVec :: [Integer] -> DenseIntOrFPElements (VectorType IntegerType) [Int64]
           mkVec vec = DenseIntOrFPElements (VectorType [fromIntegral $ length vec] I64) (fromIntegral <$> vec)
@@ -200,7 +199,7 @@ instance TensorOp Tracer where
   unsafeReverse operand dims = mkTracer $ do
     _operand <- sharing operand 
     retval $ SHLO._ReverseOp dims' _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s0 t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s0 t)
           dims' = DenseIntOrFPElements (VectorType [fromIntegral $ length dims] I64) (fromInteger <$> dims :: [Int64])
 
   splat :: forall s t. T s t => t -> Tracer s t
@@ -218,8 +217,8 @@ instance TensorOp Tracer where
       blockDef blk $ do 
         _1 <- blockArg 1
         SHLO._ReturnOp [_1]) [_type]
-    where _type      = tensorType' (Proxy :: Proxy (Tracer s0 t))
-          scalarType = tensorType' (Proxy :: Proxy (Tracer '[] t)) 
+    where _type      = tensorTypeOf (Biproxy :: Biproxy s0 t)
+          scalarType = tensorTypeOf (Biproxy :: Biproxy '[] t)
           attr       = ScatterDimensionNumbersAttr {
                          updateWindow = fromInteger <$> uwd,
                          insertWindow = fromInteger <$> iwd,
@@ -238,14 +237,14 @@ instance TensorOp Tracer where
                                                           idxVecDim = fromInteger idxVectorAxis
                                                         }
           sliceSizesAttr = DenseIntOrFPElements (RankedTensorType [fromIntegral $ length sliceSizes] I64 NullAttr) (fromInteger <$> sliceSizes :: [Int64])
-          _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+          _type = tensorTypeOf (Biproxy :: Biproxy s2 t)
 
   unsafeConcat :: forall s0 s1 s2 t. (Tensorial t, KnownShape s0, KnownShape s1, KnownShape s2) => Integer -> Tracer s0 t -> Tracer s1 t -> Tracer s2 t
   unsafeConcat dims lhs rhs = assert (lhsRank == rhsRank && lhsOtherAxes == rhsOtherAxes) $ mkTracer $ do 
     _lhs <- sharing lhs 
     _rhs <- sharing rhs
     retval $ SHLO._ConcatenateOp (IntegerAttr I64 $ fromInteger dims) [_lhs, _rhs] _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s2 t)
           lhsRank = shapeRank (Proxy :: Proxy s0)
           rhsRank = shapeRank (Proxy :: Proxy s1)
           remove n a = take n a ++ drop (n + 1) a
@@ -260,7 +259,7 @@ instance TensorOp Tracer where
     _lhs <- sharing lhs 
     _rhs <- sharing rhs 
     retval $ SHLO._DotGeneralOp attr Nothing _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s2 t)
 
   -- TODO: Add error detection
   unsafeConvolution :: forall s0 s1 s2 t. (T s0 t, T s1 t, T s2 t) => Tracer s0 t -> Tracer s1 t -> Tracer s2 t
@@ -283,7 +282,7 @@ instance TensorOp Tracer where
             outputFeatDim  = fromInteger rank2 - 1,
             outputSpatDims = [1..fromInteger rank2 - 2]
           }
-          _type = tensorType' (Proxy :: Proxy (Tracer s2 t))
+          _type = tensorTypeOf (Biproxy :: Biproxy s2 t)
           nothing :: Maybe (DenseIntOrFPElements (VectorType IntegerType) [Int64]) = Nothing
           rank0 = shapeRank (Proxy :: Proxy s0)
           rank1 = shapeRank (Proxy :: Proxy s1)
@@ -292,7 +291,7 @@ instance TensorOp Tracer where
   unsafeIota :: forall s t. T s t => Integer -> Tracer s t
   unsafeIota dims = assert (dims < rank) $ mkTracer $ do 
     retval $ SHLO._IotaOp (IntegerAttr I64 (fromInteger dims)) _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s t)
           rank  = shapeRank (Proxy :: Proxy s)
 
 
@@ -304,7 +303,7 @@ instance TensorOp Tracer where
     _true  <- sharing true 
     _cond  <- sharing cond
     retval $ SHLO._SelectOp _cond _true _false _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s t)
 
   select :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s Bool -> Tracer s t
   select false true cond = mkTracer $ do 
@@ -312,7 +311,7 @@ instance TensorOp Tracer where
     _true  <- sharing true 
     _cond  <- sharing cond
     retval $ SHLO._SelectOp _cond _true _false _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s t)
 
 
 -- instance EqualOp Tracer where
@@ -322,14 +321,14 @@ instance TensorOp Tracer where
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionEQ (Just ct) _lhs _rhs tt
     where ct = comparisonType (Proxy :: Proxy t)
-          tt = tensorType' (Proxy :: Proxy (Tracer s Bool))
+          tt = tensorTypeOf (Biproxy :: Biproxy s Bool)
   isNE :: forall s t. T s t => Tracer s t -> Tracer s t -> Tracer s Bool
   isNE lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionNE (Just ct) _lhs _rhs tt
     where ct = comparisonType (Proxy :: Proxy t)
-          tt = tensorType' (Proxy :: Proxy (Tracer s Bool))
+          tt = tensorTypeOf (Biproxy :: Biproxy s Bool)
 
 -- instance OrderOp Tracer where
   isGT :: forall s t. T s t => Tracer s t -> Tracer s t -> Tracer s Bool
@@ -337,28 +336,28 @@ instance TensorOp Tracer where
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionGT (Just ctype) _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s Bool))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s Bool)
           ctype = comparisonType (Proxy :: Proxy t)
   isGE :: forall s t. T s t => Tracer s t -> Tracer s t -> Tracer s Bool
   isGE lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionGE (Just ctype) _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s Bool))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s Bool)
           ctype = comparisonType (Proxy :: Proxy t)
   isLT :: forall s t. T s t => Tracer s t -> Tracer s t -> Tracer s Bool
   isLT lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionLT (Just ctype) _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s Bool))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s Bool)
           ctype = comparisonType (Proxy :: Proxy t)
   isLE :: forall s t. T s t => Tracer s t -> Tracer s t -> Tracer s Bool
   isLE lhs rhs = mkTracer $ do
     _lhs <- sharing lhs
     _rhs <- sharing rhs
     retval $ SHLO._CompareOp ComparisonDirectionLE (Just ctype) _lhs _rhs _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s Bool))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s Bool)
           ctype = comparisonType (Proxy :: Proxy t)
 
   unsafePairwiseAdd :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s t
@@ -366,7 +365,7 @@ instance TensorOp Tracer where
      _lhs <- sharing lhs
      _rhs <- sharing rhs
      retval $ SHLO._AddOp _lhs _rhs _type
-     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
 
 
   unsafePairwiseSub  :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s t
@@ -374,89 +373,89 @@ instance TensorOp Tracer where
      _lhs <- sharing lhs
      _rhs <- sharing rhs
      retval $ SHLO._SubtractOp _lhs _rhs _type
-     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
      
   unsafePairwiseMul  :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s t
   unsafePairwiseMul lhs rhs = mkTracer $ do 
      _lhs <- sharing lhs
      _rhs <- sharing rhs
      retval $ SHLO._MulOp _lhs _rhs _type
-     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
    
   unsafePairwiseSignum :: forall s t. (T s t) => Tracer s t -> Tracer s t
   unsafePairwiseSignum operand = mkTracer $ do
      _operand <- sharing operand
      retval $ SHLO._SignOp _operand _type
-     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
  
   unsafePairwiseNegate :: forall s t. (T s t) => Tracer s t -> Tracer s t
   unsafePairwiseNegate operand = mkTracer $ do 
      _operand <- sharing operand 
      retval $ SHLO._NegOp _operand _type
-     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
  
   unsafePairwiseAbs    :: forall s t. (T s t) => Tracer s t -> Tracer s t
   unsafePairwiseAbs    operand = mkTracer $ do 
      _operand <- sharing operand
      retval $ SHLO._AbsOp _operand _type
-     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
 
   unsafePairwiseDiv  :: forall s t. (T s t) => Tracer s t -> Tracer s t -> Tracer s t
   unsafePairwiseDiv lhs rhs = mkTracer $ do 
      _lhs <- sharing lhs
      _rhs <- sharing rhs
      retval $ SHLO._DivOp _lhs _rhs _type
-     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
 
   unsafePairwiseSin :: forall s t. (T s t) => Tracer s t -> Tracer s t
   unsafePairwiseSin operand = mkTracer $ do 
     _operand <- sharing operand 
     retval $ SHLO._SineOp _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s t)
   unsafePairwiseCos :: forall s t. (T s t) => Tracer s t -> Tracer s t
   unsafePairwiseCos operand = mkTracer $ do 
     _operand <- sharing operand 
     retval $ SHLO._CosineOp _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s t)
   unsafePairwiseTanh :: forall s t. (T s t) => Tracer s t -> Tracer s t
   unsafePairwiseTanh operand = mkTracer $ do 
     _operand <- sharing operand 
     retval $ SHLO._TanhOp _operand _type
-    where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+    where _type = tensorTypeOf (Biproxy :: Biproxy s t)
 
   unsafePairwiseExp    :: forall s t. (T s t) => Tracer s t -> Tracer s t
   unsafePairwiseExp operand = mkTracer $ do 
      _operand <- sharing operand 
      retval $ SHLO._ExpOp _operand _type 
-     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
   unsafePairwiseLog    :: forall s t. (T s t) => Tracer s t -> Tracer s t
   unsafePairwiseLog operand = mkTracer $ do 
      _operand <- sharing operand 
      retval $ SHLO._LogOp _operand _type 
-     where _type = tensorType' (Proxy :: Proxy (Tracer s t))
+     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
 
-  unsafeArgmax :: forall s s' t. (T s t, T s' t, Ord t) => Tracer s t -> Int -> Tracer s' Int64
-  unsafeArgmax operand axis = mkTracer $ do 
+  unsafeArgmax :: forall s s' t. (T s t, T s' t, Ord t) => Int -> Tracer s t -> Tracer s' Int64
+  unsafeArgmax axis operand = mkTracer $ do 
     _operand <- sharing operand
     _indices <- sharing indices
     _startOp <- sharing startOp
     _startId <- sharing startId
     retval $ (!! 1) <$> SHLO._ReduceOp redims [_operand, _indices, _startOp, _startId] (do 
-      blk0 <- blockGet [tensorType' (Proxy :: Proxy (Tracer '[] t)), tensorType' (Proxy :: Proxy (Tracer '[] Int64)),
-                        tensorType' (Proxy :: Proxy (Tracer '[] t)), tensorType' (Proxy :: Proxy (Tracer '[] Int64))]
+      blk0 <- blockGet [tensorTypeOf (Biproxy :: Biproxy '[] t), tensorTypeOf (Biproxy :: Biproxy '[] Int64),
+                        tensorTypeOf (Biproxy :: Biproxy '[] t), tensorTypeOf (Biproxy :: Biproxy '[] Int64)]
       blockDef blk0 $ do 
         lhsVal <- blockArg 0
         lhsIdx <- blockArg 1
         rhsVal <- blockArg 2
         rhsIdx <- blockArg 3
-        lhGTrh <- SHLO._CompareOp ComparisonDirectionGT Nothing lhsVal rhsVal $ tensorType' (Proxy :: Proxy (Tracer '[] Bool))
-        lhEQrh <- SHLO._CompareOp ComparisonDirectionEQ Nothing lhsVal rhsVal $ tensorType' (Proxy :: Proxy (Tracer '[] Bool))
-        val   <- SHLO._SelectOp lhGTrh lhsVal rhsVal $ tensorType' (Proxy :: Proxy (Tracer '[] t))
-        idx'  <- SHLO._SelectOp lhGTrh lhsIdx rhsIdx $ tensorType' (Proxy :: Proxy (Tracer '[] Int64))
-        idx'' <- SHLO._MaxOp lhsIdx rhsIdx $ tensorType' (Proxy :: Proxy (Tracer '[] Int64))
-        idx   <- SHLO._SelectOp lhEQrh idx'' idx' $ tensorType' (Proxy :: Proxy (Tracer '[] Int64))
+        lhGTrh <- SHLO._CompareOp ComparisonDirectionGT Nothing lhsVal rhsVal $ tensorTypeOf (Biproxy :: Biproxy '[] Bool)
+        lhEQrh <- SHLO._CompareOp ComparisonDirectionEQ Nothing lhsVal rhsVal $ tensorTypeOf (Biproxy :: Biproxy '[] Bool)
+        val   <- SHLO._SelectOp lhGTrh lhsVal rhsVal $ tensorTypeOf (Biproxy :: Biproxy '[] t)
+        idx'  <- SHLO._SelectOp lhGTrh lhsIdx rhsIdx $ tensorTypeOf (Biproxy :: Biproxy '[] Int64)
+        idx'' <- SHLO._MaxOp lhsIdx rhsIdx $ tensorTypeOf (Biproxy :: Biproxy '[] Int64)
+        idx   <- SHLO._SelectOp lhEQrh idx'' idx' $ tensorTypeOf (Biproxy :: Biproxy '[] Int64)
         SHLO._ReturnOp [val, idx]
-        ) [tensorType' (Proxy :: Proxy (Tracer s' t)), tensorType' (Proxy :: Proxy (Tracer s' Int64))]
+        ) [tensorTypeOf (Biproxy :: Biproxy s' t), tensorTypeOf (Biproxy :: Biproxy s' Int64)]
     where indices :: Tracer  s  Int64 = unsafeIota $ fromIntegral axis
           startOp :: Tracer '[] t     = splat maxIdent
           startId :: Tracer '[] Int64 = splat (-1)

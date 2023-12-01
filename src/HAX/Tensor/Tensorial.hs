@@ -8,6 +8,7 @@
 {-# LANGUAGE NoStarIsType #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE FunctionalDependencies #-}
 module HAX.Tensor.Tensorial where
 import Prelude hiding (pred)
 import HAX.PjRt.BufferType
@@ -20,10 +21,10 @@ import Control.Exception (assert)
 import Data.Kind 
 import Data.Dynamic
 import Data.Proxy
-import Data.Reflection
+import Data.Reflection hiding (Z)
 import Data.Primitive
 import Data.Int
-import Data.List
+import Data.List hiding (transpose)
 import Data.Bifunctor
 import Data.Maybe (fromJust)
 import Data.Coerce (Coercible, coerce)
@@ -41,6 +42,7 @@ import Stablehlo.Dialect.Stablehlo.Attributes
 import System.Random.Stateful
 
 -- Shape
+type N n = KnownNat n
 type Shape = [Nat]
 class Typeable s => KnownShape (s :: Shape) where
   shapeVal :: Proxy s -> [Integer]
@@ -164,17 +166,7 @@ type family Iota (dim :: Nat) (shape :: Shape) :: Constraint where
   Iota 0 _   = ()
   Iota n (_ ': as) = Iota (n - 1) as
 
--- type family ZipWith (x :: [a]) (y :: [b]) (f :: a -> b -> c) :: [c] where
---   ZipWith '[] _ _ = '[]
---   ZipWith _ '[] _ = '[]
---   ZipWith (a ': as) (b ': bs) f = f a b ': ZipWith as bs f
-
--- type family Foldl (x :: a) (f :: a -> b -> a) (y :: [b]) :: a where
---   Foldl a _ '[] = a
---   Foldl a f (b ': bs) = Foldl (f a b) f bs 
-
 type ConcatConstraint (a :: Constraint) (b :: Constraint) = (a, b) :: Constraint
-
 type family ConvolutionShapeConstraint (input :: Shape) (kernel :: Shape) (output :: Shape) :: Constraint where
   ConvolutionShapeConstraint '[] '[] '[] = ()
   ConvolutionShapeConstraint (i ': is) (k ': ks) (o ': os) = (i + 1 - k ~ o, o + k - 1 ~ i, i + 1 - o ~ k, ConvolutionShapeConstraint is ks os)
@@ -186,18 +178,18 @@ type Convolution' (input :: Shape) (kernel :: Shape) (output :: Shape) = (KnownS
 shapeOf :: forall r s t. KnownShape s => r s t -> [Integer]
 shapeOf _ = shapeVal (Proxy :: Proxy s)
 
+data Biproxy a b = Biproxy
+
 -- Tensorial
 type Z = Shape -> Type -> Type
 -- TODO: Remove Gradient
-class (Prim (StorageType t), Storable (StorageType t), TypeGet (SHLOType t), Typeable t) => Tensorial t where
-  type SHLOType t
+tensorTypeOf :: forall r s t. T s t => r s t -> AnyType
+tensorTypeOf _ = tensorTypeOf' (fromIntegral <$> shapeVal (Proxy :: Proxy s)) (Proxy :: Proxy t)
+class (Prim (StorageType t), Storable (StorageType t), Typeable t) => Tensorial t where
   type StorageType t = r | r -> t
 
-  pjrtBufferType  :: Proxy t -> BufferType
-  shloTensorType  :: Proxy t -> SHLOType t
-  
-  shloTensorType' :: Proxy t -> AnyType
-  shloTensorType' = toAnyType . shloTensorType
+  pjrtBufferType :: Proxy t -> BufferType
+  tensorTypeOf' :: [Int64] -> Proxy t -> AnyType
 
   staticSizeOf   :: Proxy t -> Int
 
@@ -409,11 +401,10 @@ class (Prim (StorageType t), Storable (StorageType t), TypeGet (SHLOType t), Typ
   selectGrad f' t' c i = f' (select i (splat 0) c) <+> t' (select (splat 0) i c)
 
 instance Tensorial Float where
-  type SHLOType Float = F32Type
   type StorageType Float = Float
 
   pjrtBufferType _ = f32
-  shloTensorType _ = F32Type
+  tensorTypeOf' shape _ = toAnyType (RankedTensorType shape F32Type NullAttr)
   staticSizeOf   _ = sizeOf (0 :: Float)
   
   splatConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
@@ -433,11 +424,10 @@ instance Tensorial Float where
   maxIdent = -fromRational infinity
   
 instance Tensorial Word8 where
-  type SHLOType Word8 = IntegerType
   type StorageType Word8 = Word8
 
   pjrtBufferType _ = u8
-  shloTensorType _ = UI8
+  tensorTypeOf' shape _ = toAnyType (RankedTensorType shape UI8 NullAttr)
   staticSizeOf   _ = sizeOf (0 :: Word8)
 
   splatConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
@@ -471,11 +461,10 @@ instance Tensorial Word8 where
   gradientSum _ = splat 0
 
 instance Tensorial Int64 where
-  type SHLOType Int64 = IntegerType
   type StorageType Int64 = Int64
 
   pjrtBufferType _ = s64
-  shloTensorType _ = I64
+  tensorTypeOf' shape _ = toAnyType (RankedTensorType shape I64 NullAttr)
   staticSizeOf   _ = sizeOf (0 :: Int64)
 
   splatConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
@@ -515,11 +504,10 @@ instance Show Pred where
   show _        = "True "
 
 instance Tensorial Bool where
-  type SHLOType Bool = IntegerType
   type StorageType Bool = Pred
 
   pjrtBufferType _ = pred
-  shloTensorType _ = I 1
+  tensorTypeOf' shape _ = toAnyType (RankedTensorType shape (I 1) NullAttr)
   staticSizeOf   _ = sizeOf (0 :: Word8)
 
   splatConstant shape value = SHLO._ConstantOp attr $ toAnyType _type
@@ -579,33 +567,11 @@ instance (KnownNat i, TensorLiteral is) => TensorLiteral (i ': is) where
   fromTensorLiteral (fromInteger . product . shapeVal -> nelem) p c l = take nelem (concatMap f l ++ repeat p)
     where f = fromTensorLiteral (Proxy :: Proxy is) p c
 
-type family FirstOrder (f :: Type) :: Constraint where
-  FirstOrder ((a -> b) -> c) = TypeError (Text "Function is not first order")
-  FirstOrder (a -> b)        = FirstOrder b
-  FirstOrder _               = ()
-
-tensorType :: forall a s t. T s t => Proxy (a s t) -> RankedTensorType NullAttr (SHLOType t)
-tensorType _ = RankedTensorType shape _type NullAttr
-  where shape = fromInteger <$> shapeVal (Proxy :: Proxy s)
-        _type = shloTensorType (Proxy :: Proxy t)
-
-tensorType' :: T s t => Proxy (a s t) -> AnyType 
-tensorType' = toAnyType . tensorType
-
-class PairwiseOp (r :: Shape -> Type -> Type) where
-
 class ConvertOp (r :: Shape -> Type -> Type) where
   convert :: (T s f, T s g) => r s f -> r s g
 
-
-
 type Transformable r = forall s s' t. Coercible (r s t) (r s' t)
 type T s t = (KnownShape s, Tensorial t)
--- The lhs (image, or volume, or whatever) is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
---     rhs (kernel)                        is [IN FEAT DIM,  ...(SPATIAL DIM)..., OUT FEAT DIM]
---     output                              is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
--- This is to simplify implementation
-
 forceShape :: [Integer] -> (forall s. KnownShape s => r s t) -> (forall s. KnownShape s => r s t -> a) -> a
 forceShape shape value func = reifyShape shape $ \(same value -> value') -> func value'
   where same :: KnownShape s => r s t -> Proxy s -> r s t
@@ -614,6 +580,10 @@ forceShape shape value func = reifyShape shape $ \(same value -> value') -> func
 showShape :: forall r s t. KnownShape s => r s t -> String
 showShape _ = show (shapeVal (Proxy :: Proxy s))
 
+-- The lhs (image, or volume, or whatever) is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
+--     rhs (kernel)                        is [IN FEAT DIM,  ...(SPATIAL DIM)..., OUT FEAT DIM]
+--     output                              is [BATCHING DIM, ...(SPATIAL DIM)..., FEATURE DIM]
+-- This is to simplify implementation
 class (Transformable r, Typeable r) => TensorOp (r :: Shape -> Type -> Type) where
   assumeEqShape :: forall s s' t. (KnownShape s, KnownShape s') => r s t -> r s' t -- bypass the problem where s should be s', but compiler cannot prove it
   assumeEqShape = assert (shapeVal (Proxy :: Proxy s) == shapeVal (Proxy :: Proxy s')) coerce
@@ -672,7 +642,7 @@ class (Transformable r, Typeable r) => TensorOp (r :: Shape -> Type -> Type) whe
   splat                :: (T s t) => t -> r s t
 
   -- TODO: Return both the argmax and max values
-  unsafeArgmax         :: (Ord t, T s t, T s' t) => r s t -> Int -> r s' Int64
+  unsafeArgmax         :: (Ord t, T s t, T s' t) => Int -> r s t -> r s' Int64
 
   -- TODO: Move these to a different class
   unsafeLinspace       :: forall s t. (T s t, Fractional t, Enum t) => Integer -> (t, t) -> r s t
@@ -715,10 +685,54 @@ class (Transformable r, Typeable r) => TensorOp (r :: Shape -> Type -> Type) whe
           rank       = length operandShape
           slicing i  = zipWith (\a o -> if a == splitAxis then (i * sliceDim, (i + 1) * sliceDim, 1) else (0, o, 1)) [0..rank - 1] operandShape
 
-  unsafeSoftmax :: forall s t. (T s t, Floating t) => r s t -> [Int] -> r s t 
-  unsafeSoftmax (unsafePairwiseExp -> operand) redims = 
-    reifyShape (rais redims shape) $ \(same (unsafeReduceAdd operand $ fromIntegral <$> redims) -> k) -> 
-      operand `unsafePairwiseDiv` (unsafeBroadcast k (rais redims (zipWith const [0..] shape)) + 1e-3)
+class Struct t r ~ t => Structure t (r :: Z) | t -> r where
+  type Struct t (r' :: Z) = k | k -> r'
+  change :: t -> (forall s j. T s j => r s j -> r' s j) -> Struct t r'
+instance (TensorOp r, T s t) => Structure (r s t) r where
+  type Struct (r s t) r' = r' s t
+  change t f = f t
+instance (Structure a r, Structure b r) => Structure (a, b) r where
+  type Struct (a, b) r' = (Struct a r', Struct b r')
+  change (a, b) f = (change a f, change b f)
+
+-- For functions derivable from TensorOp
+--    the function should require more than one function from TensorOp
+class TensorOp r => FusedOp r where
+  countTrue :: KnownShape s => r s Bool -> r '[] Int64
+  countTrue = reduceAdd' . select 0 1
+  
+  argmax :: (T s t, Ord t, KnownNat axis, s' ~ Argmax s axis, T s' Int64) => Proxy axis -> r s t -> r s' Int64
+  argmax = unsafeArgmax . fromIntegral . natVal
+
+  mean'  :: forall s t. (T s t, Fractional t) => r s t -> r '[] t
+  mean' = (/n) . reduceAdd' 
+    where n = fromIntegral $ product (shapeVal (Proxy :: Proxy s))
+
+  -- Loss func
+  crossEntropy :: forall s t. (TensorOp r, T s t, Floating t) => r s t -> r s t -> r '[] t
+  crossEntropy p q = negate . mean' $ (p * log q)
+
+  mse :: (T s t, Fractional t) => r s t -> r s t -> r '[] t
+  mse x y = mean' $ d * d
+    where d = x - y
+
+  -- activation 
+  relu :: (T s t, TensorOp r, Num t, Ord t) => r s t -> r s t
+  relu x = select 0 x (x `isGT` 0)
+  
+  leakyrelu :: (T s t, TensorOp r, Num t, Ord t) => r '[] t -> r s t -> r s t
+  leakyrelu alpha = leakyrelu' $ broadcast alpha (Proxy :: Proxy '[])
+  
+  leakyrelu' :: (T s t, TensorOp r, Num t, Ord t) => r s t -> r s t -> r s t
+  leakyrelu' alpha x = x * select alpha 1 (x `isGT` 0)
+  
+  sigmoid :: (T s t, Floating t) => r s t -> r s t
+  sigmoid x = recip (1 + exp (negate x))
+
+  softmax :: forall s t. (T s t, Floating t) => [Int] -> r s t -> r s t 
+  softmax axis (unsafePairwiseExp -> operand) = 
+    reifyShape (rais axis' shape) $ \(same (unsafeReduceAdd operand $ fromIntegral <$> axis') -> k) -> 
+      operand `unsafePairwiseDiv` (unsafeBroadcast k (rais axis' (zipWith const [0..] shape)) + 1e-3)
     where rai i l = take i l ++ drop (i + 1) l
           rais (sort -> y) l = 
             let rais' []     k = k
@@ -728,34 +742,46 @@ class (Transformable r, Typeable r) => TensorOp (r :: Shape -> Type -> Type) whe
           same :: r s' t -> Proxy s' -> r s' t
           same = const 
           shape = shapeVal (Proxy :: Proxy s)
+          rank = length (shapeVal (Proxy :: Proxy s))
+          axis' = [i | i <- axis, 0 <= i && i < rank]
 
-instance (TensorOp r, T s t, Num t) => Num (r s t) where
-  (+) = unsafePairwiseAdd
-  (-) = unsafePairwiseSub
-  (*) = unsafePairwiseMul
+  softmax' :: forall s t. (T s t, Floating t) => r s t -> r s t
+  softmax' = softmax (take rank [0..])
+    where rank = fromIntegral $ shapeRank (Proxy :: Proxy s)
 
-  abs = unsafePairwiseAbs
-  negate = unsafePairwiseNegate
-  signum = unsafePairwiseSignum
+  mha :: forall query head key key' val val' queries keys out t. (Tensorial t, Floating t, N queries, N head, N key', N val', N val, N query, N key, N keys, N out) => r [query, head, key'] t -> r [key, head, key'] t -> r [val, head, val'] t -> r [head, val', out] t -> r [queries, query] t -> r [keys, key] t -> r [keys, val] t -> r [queries, out] t
+  mha wq wk wv wo queries keys values = result
+    where keys'      :: r [keys, head, key'] t    = unsafeDotGeneral keys      wk      (DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [(1, 0)] })
+          values'    :: r [keys, head, val'] t    = unsafeDotGeneral values    wv      (DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [(1, 0)] })
+          queries'   :: r [queries, head, key'] t = unsafeDotGeneral queries   wq      (DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [(1, 0)] })
+          weights_   :: r [head, queries, keys] t = unsafeDotGeneral queries'  keys'   (DotDimensionNumbersAttr { getBatchingDims = [(1, 1)], getContractingDims = [(2, 2)] })
+          weights    :: r [queries, head, keys] t = transpose weights_ (Proxy :: Proxy [1, 0, 2])
+          weights'   :: r [queries, head, keys] t = softmax [2] weights / realToFrac (recip $ sqrt $ fromInteger $ natVal (Proxy :: Proxy key') :: Float)
+          attention_ :: r [head, queries, val'] t = unsafeDotGeneral weights'  values' (DotDimensionNumbersAttr { getBatchingDims = [(1, 1)], getContractingDims = [(2, 0)] })
+          attention  :: r [queries, head, val'] t = transpose attention_ (Proxy :: Proxy [1, 0, 2])
+          result     :: r [queries, out] t        = unsafeDotGeneral attention wo      (DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [(1, 0), (2, 1)] })
 
-  fromInteger = splat . fromInteger
+instance {-# OVERLAPPABLE #-} TensorOp r => FusedOp r
 
-instance (TensorOp r, T s t, Fractional t) => Fractional (r s t) where
-  (/) = unsafePairwiseDiv
-  fromRational = splat . fromRational
+-- Reduction
+reduceAdd :: (TensorOp r, T s t, T s' t, KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
+reduceAdd operand = unsafeReduceAdd operand . shapeVal
 
-instance (Floating t, T s t, TensorOp r) => Floating (r s t) where
-  pi = splat pi
-  exp = unsafePairwiseExp
-  log = unsafePairwiseLog
-  sin = unsafePairwiseSin
-  cos = unsafePairwiseCos
+reduceAdd' :: forall r s t. (TensorOp r, T s t, Num t) => r s t -> r '[] t
+reduceAdd' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
+
+reduceMul :: (TensorOp r, T s t, T s' t, KnownShape (Reduce s s'), Num t) => r s t -> Proxy s' -> r (Reduce s s') t
+reduceMul operand = unsafeReduceMul operand . shapeVal
+
+reduceMul' :: forall r s t. (TensorOp r, T s t, Num t) => r s t -> r '[] t
+reduceMul' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
 
 type family Split (lhs :: [a]) (rhs :: [a]) :: Constraint where
   Split (a ': ls) (a ': rs) = (a ~ a, Split ls rs)
   Split (a ': ls) (b ': rs) = (ls ~ rs)
   Split '[] '[] = ()
   Split _ _ = TypeError (Text "lhs and rhs can only differ by at most one elem")
+
 split :: (TensorOp r, T s t, T s' t, Split s s') => r s t -> [r s' t]
 split = unsafeSplit
 
@@ -763,7 +789,6 @@ type family ValidIdx (x :: [a]) (y :: Nat) :: Constraint where
   ValidIdx _   0 = ()
   ValidIdx '[]     _ = (TypeError (Text "Not a valid index"))
   ValidIdx (a':as) i = ValidIdx as (i - 1) 
-
 linspace :: forall axis r s t. (TensorOp r, T s t, Fractional t, Enum t, KnownNat axis, ValidIdx s axis) => Proxy axis -> (t, t) -> r s t
 linspace = unsafeLinspace . natVal
 
@@ -777,6 +802,7 @@ onehot indices = isEQ c i
 operand @% (fromInteger -> index :: r '[] Int64) = unsafeGather operand index [0..resultRank - 1] [0] [0] 0 (1:resultShape)
   where resultRank  = shapeRank (Proxy :: Proxy ns)
         resultShape = shapeVal  (Proxy :: Proxy ns)
+infixl 5 @%
 
 unsafeDiagonal :: forall s0 s1 r t. (T s0 t, T s1 t, TensorOp r) => Integer -> Integer -> r s0 t -> r s1 t
 unsafeDiagonal keepAxes removeAxes input = assert (inputShape !! fromInteger keepAxes == inputShape !! fromInteger removeAxes) $ 
@@ -811,26 +837,12 @@ transpose operand = unsafeTranspose operand . shapeVal
 reshape :: (Tensorial t, KnownShape s0, KnownShape s1, Reshapable s0 s1, TensorOp r) => r s0 t -> r s1 t
 reshape = unsafeReshape
 
-
 iota :: (Iota d s, KnownShape s, KnownNat d, Tensorial t, Enum t, TensorOp r) => Proxy d -> r s t
 iota = unsafeIota . natVal
 
 linearMap :: (KnownNat i, KnownNat o, Tensorial t, Num t, TensorOp r) => r '[i, o] t -> r '[i] t -> r '[o] t 
 linearMap mat vec = unsafeDotGeneral mat vec dotAttr 
   where dotAttr = DotDimensionNumbersAttr { getBatchingDims = [], getContractingDims = [(0, 0)] }
-
--- Reduction
-reduceAdd :: (T s t, T s' t, KnownShape (Reduce s s'), Num t, TensorOp r) => r s t -> Proxy s' -> r (Reduce s s') t
-reduceAdd operand = unsafeReduceAdd operand . shapeVal
-
-reduceAdd' :: forall r s t. (T s t, Num t, TensorOp r) => r s t -> r '[] t
-reduceAdd' = (`unsafeReduceAdd` [0..shapeRank (Proxy :: Proxy s) - 1])
-
-reduceMul :: (T s t, T s' t, KnownShape (Reduce s s'), Num t, TensorOp r) => r s t -> Proxy s' -> r (Reduce s s') t
-reduceMul operand = unsafeReduceMul operand . shapeVal
-
-reduceMul' :: forall r s t. (T s t, Num t, TensorOp r) => r s t -> r '[] t
-reduceMul' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
 
 -- TODO: Implement + - * / etc with automatic broadcasting
 prod :: (TensorProductConstraint lhs rhs p, Tensorial t, Num t, TensorOp r) => r lhs t -> r rhs t -> r p t
@@ -856,40 +868,31 @@ infixl 9 |#|
 (|@|) :: (Tensorial t, KnownNat n, KnownNat m, KnownNat q, Num t, TensorOp r) => r '[n, m] t -> r '[m, q] t -> r '[n, q] t
 (|@|) = matmul
 infixl 8 |@|
-
 -- TODO: Add conditional
-relu :: (T s t, TensorOp r, Num t, Ord t) => r s t -> r s t
-relu x = select 0 x (x `isGT` 0)
-
-leakyrelu :: (T s t, TensorOp r, Num t, Ord t) => r '[] t -> r s t -> r s t
-leakyrelu alpha = leakyrelu' $ broadcast alpha (Proxy :: Proxy '[])
-
-leakyrelu' :: (T s t, TensorOp r, Num t, Ord t) => r s t -> r s t -> r s t
-leakyrelu' alpha x = x * select alpha 1 (x `isGT` 0)
-
-sigmoid :: Floating a => a -> a
-sigmoid x = recip (1 + exp (negate x))
-
-softmax :: forall r s t. (TensorOp r, T s t, Floating t) => r s t -> r s t
-softmax operand = unsafeSoftmax operand (take rank [0..])
-  where rank = fromIntegral $ shapeRank (Proxy :: Proxy s)
-
-mse :: forall r s t. (TensorOp r, T s t, Fractional t) => r s t -> r s t -> r '[] t
-mse x y = (/splat n) $ reduceAdd' $ d * d
-  where d = x - y
-        n = product $ fromInteger <$> shapeVal (Proxy :: Proxy s)
-
-crossEntropy :: forall r s t. (TensorOp r, T s t, Floating t) => r s t -> r s t -> r '[] t
-crossEntropy p q = (/splat n) . negate $ reduceAdd' (p * log q)
-  where n = product $ fromInteger <$> shapeVal (Proxy :: Proxy s)
 
 type family Argmax (a :: Shape) (d :: Nat) :: Shape where
   Argmax (a ': as) 0 = as
   Argmax (a ': as) i = a ': Argmax as (i - 1)
   Argmax '[]       _ = TypeError (Text "Reduction axis invalid")
 
-argmax :: (TensorOp r, T s t, Ord t, KnownNat axis, s' ~ Argmax s axis, T s' Int64) => r s t -> Proxy axis -> r s' Int64
-argmax operand = unsafeArgmax operand . fromIntegral . natVal
+
+-- Foldind over tensors 
+-- Use these functions if memory is limited 
+determindSpliting :: [Integer] -> [Integer] -> [[(Integer, Integer, Integer)]]
+determindSpliting op sl = 
+  let axis = differAxis op sl
+      odim = op !! axis
+      sdim = sl !! axis
+      step = odim `div` sdim
+      rank = length op
+      slicing i = zipWith (\a o -> if a == axis then (i * sdim, (i + 1) * sdim, 1) else (0, o, 1)) [0..rank - 1] op
+  in  map slicing [0..step - 1]
+  where differAxis lhs rhs = 
+          let differAxis' i (a:as) (b:bs)
+                | a == b    = differAxis' (i + 1) as bs 
+                | otherwise = if as == bs then i else error "Invalid shapes for spliting"
+              differAxis' _ _ _ = error "Invalid shapes for spliting"
+          in  differAxis' 0 lhs rhs
 
 foldlSplit :: forall r s s' t a. (TensorOp r, T s t, T s' t, Split s s') => (a -> r s' t -> a) -> a -> r s t -> a
 foldlSplit func inital operand = 
@@ -916,23 +919,7 @@ foldlSplit func inital operand =
         rank       = length operandShape
         slicing i  = zipWith (\a o -> if a == splitAxis then (i * sliceDim, (i + 1) * sliceDim, 1) else (0, o, 1)) [0..rank - 1] operandShape
 
-determindSpliting :: [Integer] -> [Integer] -> [[(Integer, Integer, Integer)]]
-determindSpliting op sl = 
-  let axis = differAxis op sl
-      odim = op !! axis
-      sdim = sl !! axis
-      step = odim `div` sdim
-      rank = length op
-      slicing i = zipWith (\a o -> if a == axis then (i * sdim, (i + 1) * sdim, 1) else (0, o, 1)) [0..rank - 1] op
-  in  map slicing [0..step - 1]
-  where differAxis lhs rhs = 
-          let differAxis' i (a:as) (b:bs)
-                | a == b    = differAxis' (i + 1) as bs 
-                | otherwise = if as == bs then i else error "Invalid shapes for spliting"
-              differAxis' _ _ _ = error "Invalid shapes for spliting"
-          in  differAxis' 0 lhs rhs
-
-foldlSplit2 :: forall r s0 s1 s0' s1' t a. (TensorOp r, T s0 t, T s0' t, T s1 t, T s1' t, Split s0 s0', Split s1 s1') => (a -> r s0' t -> r s1' t -> a) -> a -> r s0 t -> r s1 t -> a
+foldlSplit2 :: forall r s0 s1 s0' s1' t0 t1 a. (TensorOp r, T s0 t0, T s0' t0, T s1 t1, T s1' t1, Split s0 s0', Split s1 s1') => (a -> r s0' t0 -> r s1' t1 -> a) -> a -> r s0 t0 -> r s1 t1 -> a
 foldlSplit2 func inital lhs rhs = 
   if lhsShape == lhsShape' && rhsShape == rhsShape' then
     func inital (assumeEqShape lhs) (assumeEqShape rhs)
@@ -947,3 +934,47 @@ foldlSplit2 func inital lhs rhs =
         rhsShape' = shapeVal (Proxy :: Proxy s1') 
         lhs' = determindSpliting lhsShape lhsShape'
         rhs' = determindSpliting rhsShape rhsShape'
+
+foldlSplit3 :: forall r s0 s1 s0' s1' s2 s2' t0 t1 t2 a. (TensorOp r, T s0 t0, T s0' t0, T s1 t1, T s1' t1, T s2 t2, T s2' t2, Split s0 s0', Split s1 s1', Split s2 s2') => (a -> r s0' t0 -> r s1' t1 -> r s2' t2 -> a) -> a -> r s0 t0 -> r s1 t1 -> r s2 t2 -> a
+foldlSplit3 func inital lhs rhs thd = 
+  if lhsShape == lhsShape' && rhsShape == rhsShape' && thdShape == thdShape' then
+    func inital (assumeEqShape lhs) (assumeEqShape rhs) (assumeEqShape thd)
+  else
+    foldl (\accum (ls, rs, ts) -> 
+      let l = unsafeSlice lhs ls
+          r = unsafeSlice rhs rs
+          t = unsafeSlice thd ts
+      in  func accum l r t) inital (zip3 lhs' rhs' thd')
+  where lhsShape  = shapeVal (Proxy :: Proxy s0)
+        rhsShape  = shapeVal (Proxy :: Proxy s1)
+        thdShape  = shapeVal (Proxy :: Proxy s2)
+        lhsShape' = shapeVal (Proxy :: Proxy s0') 
+        rhsShape' = shapeVal (Proxy :: Proxy s1') 
+        thdShape' = shapeVal (Proxy :: Proxy s2')
+        lhs' = determindSpliting lhsShape lhsShape'
+        rhs' = determindSpliting rhsShape rhsShape'
+        thd' = determindSpliting thdShape thdShape'
+
+
+-- Orphans
+instance (TensorOp r, T s t, Num t) => Num (r s t) where
+  (+) = unsafePairwiseAdd
+  (-) = unsafePairwiseSub
+  (*) = unsafePairwiseMul
+
+  abs = unsafePairwiseAbs
+  negate = unsafePairwiseNegate
+  signum = unsafePairwiseSignum
+
+  fromInteger = splat . fromInteger
+
+instance (TensorOp r, T s t, Fractional t) => Fractional (r s t) where
+  (/) = unsafePairwiseDiv
+  fromRational = splat . fromRational
+
+instance (Floating t, T s t, TensorOp r) => Floating (r s t) where
+  pi = splat pi
+  exp = unsafePairwiseExp
+  log = unsafePairwiseLog
+  sin = unsafePairwiseSin
+  cos = unsafePairwiseCos

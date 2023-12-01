@@ -23,7 +23,6 @@ import Data.Primitive hiding (newArray)
 import Data.Kind (Type)
 import Data.Bifunctor
 import Data.Coerce (coerce)
-import Data.IntMap.Lazy as I hiding (null)
 
 import Foreign
 import Foreign.C (CIntPtr)
@@ -34,7 +33,8 @@ import GHC.IO.Unsafe (unsafePerformIO)
 import GHC.TypeError
 import GHC.IsList
 import GHC.Generics
-import System.Mem (performMinorGC)
+
+import System.Mem (performMajorGC)
 
 newtype Tensor (s :: Shape) a = Tensor { getTensorBuffer :: Buffer }
 newtype Tensor' = Tensor' { getTensor'Buffer :: Buffer }
@@ -145,7 +145,6 @@ tensorSplat device a = do
   tensorFromHostBufferGC device content
   where elemCount = fromIntegral $ product $ shapeVal (Proxy :: Proxy s)
 
-
 -- Implement a jit the convert from function of tracers to tensors 
 instance ConvertOp Tensor where
   convert = jitT convert
@@ -205,15 +204,27 @@ instance TensorOp Tensor where
   isLT = jitT isLT
   isLE = jitT isLE
 
-  -- unsafeSplit   = jitT unsafeSplit
-  unsafeSoftmax = jitT unsafeSoftmax
+  unsafeArgmax = jitT unsafeArgmax
 
-  unsafeArgmax  = jitT unsafeArgmax
+instance FusedOp Tensor where
+  mse          = jitT mse
+  mha          = jitT mha
+  mean'        = jitT mean'
+  relu         = jitT relu
+  argmax       = jitT argmax
+  sigmoid      = jitT sigmoid
+  softmax      = jitT . softmax
+  softmax'     = jitT softmax'
+  countTrue    = jitT countTrue
+  leakyrelu    = jitT leakyrelu
+  leakyrelu'   = jitT leakyrelu'
+  crossEntropy = jitT crossEntropy
 
 -- Jit Nested Transformation
 instance TypeError (Text "cannot jit this function") => JNT Tensor where
   fromTracer = undefined
   toTracer   = undefined
+
 data CacheHit g = CacheHit LoadedExecutable Int ([Buffer] -> JitT g)
 newtype Cache  a b = Cache  { unCache  :: JitC  a b }
 newtype Cache' a b = Cache' { unCache' :: JitC' a b }
@@ -286,9 +297,9 @@ instance (JNT r, T s t) => Jit' (r s t) where
   type JitT (r s t)   = Tensor s t
   type JitC (r s t) b = b
   jitIn (Cache b, args) (Tensor arg) = (b, args++[arg])
-  jitOut c f (i, t) = Cache $ c (f $ fromTracer . Tracer $ \x -> (x, ) <$> blockArg i) (i + 1, t++[tensorType' (Proxy :: Proxy (Tracer s t))])
-  jitCache (toTracer -> Tracer f) = (fmap (fmap (: [])) . f, [tensorType' (Proxy :: Proxy (Tracer s t))], \case []   -> error "Not enough output"
-                                                                                                                a:as -> (Tensor a, as))
+  jitOut c f (i, t) = Cache $ c (f $ fromTracer . Tracer $ \x -> (x, ) <$> blockArg i) (i + 1, t++[tensorTypeOf (Biproxy :: Biproxy s t)])
+  jitCache (toTracer -> Tracer f) = (fmap (fmap (: [])) . f, [tensorTypeOf (Biproxy :: Biproxy s t)], \case []   -> error "Not enough output"
+                                                                                                            a:as -> (Tensor a, as))
 instance (Jit' a, Jit' b) => Jit' (a, b) where
   type JitT (a, b)   = (JitT a, JitT b)
   type JitC (a, b) c = JitC' (Rep (a, b)) c
@@ -301,30 +312,35 @@ instance Jit' a => Jit' [a] where
 instance Jit' Bool where
   type JitT Bool   = Bool
   type JitC Bool b = JitC' (Rep Bool) b
+instance Jit' (Proxy a) where
+  type JitT (Proxy a)   = Proxy a
+  type JitC (Proxy a) b = JitC' (Rep (Proxy a)) b -- TODO: Maybe implement this manually 
 instance Jit' Int  where 
   type JitT Int   = Int
-  type JitC Int b = IntMap b
-  jitIn  (Cache tbl, ins) idx = (tbl ! idx, ins)
-  jitOut continue f state = Cache $ I.fromList [(i, continue (f i) state) | i <- g [0..maxBound] [-1,-2..minBound]]
-    where g (a:as) (b:bs) = a:b:g as bs
-          g a [] = a
-          g [] b = b
-  jitCache = undefined
+  type JitC Int b = ([b], [b]) -- TODO: Do something better than linear search
+  jitIn  (Cache (lt0, ge0), ins) idx 
+    | idx >= 0  = (ge0 !! idx, ins)
+    | otherwise = (lt0 !! (-idx - 1), ins)
+  jitOut continue f state = Cache ([continue (f i) state | i <- [-1, -2]], [continue (f i) state | i <- [0..maxBound]])
+  jitCache idx = (pure . (, []), [], (idx, ))
 instance TypeError (Text "Jit can only be applied to first order function.") => Jit' (a -> b) where
   type JitT _   = TypeError (Text "Jit can only be applied to first order function.")
   type JitC _ _ = TypeError (Text "Jit can only be applied to first order function.")
   jitIn    = undefined
   jitOut   = undefined
   jitCache = undefined
+type family JitE f = r | r -> f where
+  JitE (a -> b) = Cache a (JitE b)
+  JitE a        = CacheHit a
+type family JitF f = r where
+  JitF (a -> b) = JitT a -> JitF b
+  JitF a        = JitT a
 class Jit f where
-  type JitF f
-  type JitE f = r | r -> f
-
   jit'    :: (JitE f, [Buffer]) -> JitF f
   default jit' :: (Jit' f, JitE f ~ CacheHit f, JitF f ~ JitT f) => (JitE f, [Buffer]) -> JitF f
   jit' (CacheHit executable coarity constructor, arguments) = unsafePerformIO $ constructor <$> do
     results <- loadedExecutableExecute1Await executable arguments Nothing coarity
-    performMinorGC
+    performMajorGC -- prevent the haskell from comsuming too much memory because the gc does not know how much memory the program own
     return results
 
   jit''   :: f -> (CIntPtr, [AnyType]) -> JitE f
@@ -333,32 +349,22 @@ class Jit f where
     where (main, outputs, reifier) = jitCache f
           executable = compile (inputs, main, outputs)
 instance (Jit' a, Jit b) => Jit (a -> b) where
-  type JitF (a -> b) = JitT a -> JitF b
-  type JitE (a -> b) = Cache a (JitE b)
-
   jit' cache = jit' . jitIn cache
   jit'' = jitOut jit''
 instance (JNT r, T s t) => Jit (r s t) where
-  type JitF (r s t) = JitT (r s t)
-  type JitE (r s t) = CacheHit (r s t)
 instance Jit' a => Jit [a] where
-  type JitF [a] = JitT [a]
-  type JitE [a] = CacheHit [a]
 instance (Jit' a, Jit' b) => Jit (a, b) where
-  type JitF (a, b) = JitT (a, b)
-  type JitE (a, b) = CacheHit (a, b)
 instance (Jit' a, Jit' b) => Jit (a <&> b) where
-  type JitF (a <&> b) = JitT (a <&> b)
-  type JitE (a <&> b) = CacheHit (a <&> b)
 
-type family ReverseJit f = f' | f' -> f where
-  ReverseJit (a -> b)     = ReverseJit a -> ReverseJit b
-  ReverseJit [a]          = [ReverseJit a]
-  ReverseJit (a, b)       = (ReverseJit a, ReverseJit b)
-  ReverseJit (a <&> b)    = ReverseJit a <&> ReverseJit b
-  ReverseJit (Tensor s t) = Tracer s t
-  ReverseJit Bool         = Bool
-  ReverseJit Int          = Int
+type family ReverseJit f = f' | f' -> f
+type instance ReverseJit (a -> b)     = ReverseJit a -> ReverseJit b
+type instance ReverseJit [a]          = [ReverseJit a]
+type instance ReverseJit (a, b)       = (ReverseJit a, ReverseJit b)
+type instance ReverseJit (a <&> b)    = ReverseJit a <&> ReverseJit b
+type instance ReverseJit (Tensor s t) = Tracer s t
+type instance ReverseJit Bool         = Bool
+type instance ReverseJit Int          = Int
+type instance ReverseJit (Proxy a)    = Proxy a
 
 jit :: Jit f => f -> JitF f
 jit = jit' . (, []) . (`jit''` (0, []))

@@ -58,12 +58,3 @@ variableInsert name@(hashStableName -> hash) item (VarTable variable) = VarTable
 
 emptyVarTable :: VarTable i
 emptyVarTable = VarTable empty
-
-
-
-
-
-
-
-
-

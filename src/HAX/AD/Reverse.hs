@@ -130,7 +130,7 @@ instance TensorOp r => TensorOp (Reverse r) where
   isLT (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (isLT lhs rhs, const zero)
   isLE (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (isLE lhs rhs, const zero)
 
-  unsafeArgmax (R f _) axis = R (unsafeArgmax f axis) nograd
+  unsafeArgmax axis (R f _) = R (unsafeArgmax axis f) nograd
 
 class Grad f where  
   type GradF'  f g

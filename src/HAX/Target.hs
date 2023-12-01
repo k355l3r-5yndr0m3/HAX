@@ -325,10 +325,10 @@ instance TensorOp r => TensorOp (Target r) where
   isLT lhs rhs = binary lhs rhs (\dims lhs' -> Target dims . coerce . isLT lhs' . assumeEqShape)
   isLE lhs rhs = binary lhs rhs (\dims lhs' -> Target dims . coerce . isLE lhs' . assumeEqShape)
 
-  unsafeArgmax :: forall s s' t. (Ord t, T s t, T s' t) => Target r s t -> Int -> Target r s' Int64
-  unsafeArgmax operand axis = unitary operand (\dims operand' -> Target dims $
+  unsafeArgmax :: forall s s' t. (Ord t, T s t, T s' t) => Int -> Target r s t -> Target r s' Int64
+  unsafeArgmax axis operand = unitary operand (\dims operand' -> Target dims $
     let axis' = axis + length dims 
-    in  forceShape (dims ++ shapeVal s') (unsafeArgmax operand' axis') coerce)
+    in  forceShape (dims ++ shapeVal s') (unsafeArgmax axis' operand') coerce)
     where s' = Proxy :: Proxy s'
 
 -- -- VMap transform
