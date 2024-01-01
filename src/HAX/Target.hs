@@ -154,7 +154,7 @@ instance TensorOp r => TensorOp (Target r) where
   unsafeGather (Target opBatch operand) (Target stBatch start) offsetAxes collapsedAxes startAxesMap idxVectorAxis sliceSizes = 
     reifyShape (batchSize:shapeVal (Proxy :: Proxy s0)) $ \(same (coerce operand) -> operand') -> 
       reifyShape (batchSize:shapeVal (Proxy :: Proxy s1)) $ \(same' (coerce start) -> start') -> 
-        reifyShape iotaShape $ \(sameT (unsafeIota idxVectorAxis') -> iota') ->
+        reifyShape iotaShape $ \(sameT (unsafeIota $ fromInteger idxVectorAxis') -> iota') ->
           let oper = Target opBatch' operand'
               star = Target stBatch' start'
               outshape = batchSize:shapeVal (Proxy :: Proxy s2)
@@ -326,10 +326,10 @@ instance TensorOp r => TensorOp (Target r) where
   isLE lhs rhs = binary lhs rhs (\dims lhs' -> Target dims . coerce . isLE lhs' . assumeEqShape)
 
   unsafeArgmax :: forall s s' t. (Ord t, T s t, T s' t) => Int -> Target r s t -> Target r s' Int64
-  unsafeArgmax axis operand = unitary operand (\dims operand' -> Target dims $
-    let axis' = axis + length dims 
-    in  forceShape (dims ++ shapeVal s') (unsafeArgmax axis' operand') coerce)
-    where s' = Proxy :: Proxy s'
+  unsafeArgmax axis operand = unitary operand (\dims operand' -> Target dims $ forceShape (dims ++ shapeVal' @s') (unsafeArgmax (axis + length dims) operand') coerce)
+
+  unsafeMultiDimArgmax :: forall s s' t. (Ord t, T s t, T s' t) => [Int] -> Target r s t -> Target r s' Int64
+  unsafeMultiDimArgmax axes operand = unitary operand (\dims operand' -> Target dims $ forceShape (dims ++ shapeVal' @s') (unsafeMultiDimArgmax ((+ length dims) <$> axes) operand') coerce)
 
 -- -- VMap transform
 class Vectorizable f where

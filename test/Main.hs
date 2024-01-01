@@ -261,7 +261,9 @@ main = do
     writePng "test/data/image-conv0.png" (convertRGB8 $ ImageRGBF $ imageFromTensor (t2 @% 0))
     writePng "test/data/image-conv1.png" (convertRGB8 $ ImageRGBF $ imageFromTensor (t2 @% 1))) =<< readImage "test/data/image.jpg"
 
-
+  let testtensor  = [[0, 2, 4, 3, 2, 0], [2, 3, 7, 4, 1, 9], [4, 11, 4, 5, 8, 3]] :: Tensor '[3, 6] Float
+      testargmax2 = unsafeMultiDimArgmax [0, 1] testtensor :: Tensor '[2] Int64
+  print testargmax2 
 
 
   -- OK: clientDestroy now fuck something up, how

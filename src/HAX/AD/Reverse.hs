@@ -131,6 +131,7 @@ instance TensorOp r => TensorOp (Reverse r) where
   isLE (Reverse (lhs, _)) (Reverse (rhs, _)) = Reverse (isLE lhs rhs, const zero)
 
   unsafeArgmax axis (R f _) = R (unsafeArgmax axis f) nograd
+  unsafeMultiDimArgmax axes (R f _) = R (unsafeMultiDimArgmax axes f) nograd
 
 class Grad f where  
   type GradF'  f g
@@ -243,9 +244,11 @@ instance (T s t, GNT r) => GradIn (r s t) where
   gradIn i r = (i + 1, fromReverse $ R r (independent i), \(Gradient gs) ->
     let (fmap snd -> g, gs') = partition ((== i) . fst) gs
     in  (gradientSum g, Gradient gs'))
+
 instance GradIn Rational where
   type GradI Rational = Rational
   gradIn = (, , (0,))
+
 
 instance GradIn a => GradIn [a] where
   type GradI [a] = [GradI a]

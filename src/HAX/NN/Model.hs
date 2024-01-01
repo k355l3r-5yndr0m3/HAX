@@ -14,14 +14,15 @@ import GHC.TypeLits
 import GHC.Generics
 
 class Model p a b | p a -> b {- , p b -> a -} where
+  {-# MINIMAL feed #-}
   feed :: p -> a -> b
 
 -- Combination
-data a >> b = a :>: b deriving (Generic, Show)
+data a >> b = a :>: b deriving Generic
 infixr 9 >>, :>:
 instance (NGradIn f, NGradIn g) => NGradIn (f >> g)
 
-data a !! b = a :!: b deriving (Generic, Show)
+data a !! b = a :!: b deriving Generic
 infixr 9 !!, :!:
 instance (NGradIn f, NGradIn g) => NGradIn (f !! g)
 instance (Jit' a, Jit' b) => Jit' (a >> b) where
@@ -104,7 +105,7 @@ instance (TensorOp r, T s t, Num t, Ord t) => Model ReLU (r s t) (r s t) where
 data Softmax = Softmax deriving (Generic, Show)
 instance NGradIn Softmax
 instance Jit' Softmax where
-  type JitT Softmax = Softmax
+  type JitT Softmax   = Softmax
   type JitC Softmax b = JitC' (Rep Softmax) b
 instance Jit Softmax where
 instance GradIn Softmax where
@@ -163,3 +164,14 @@ instance (JNT r, Tensorial t, N head, N dmodel, N (dmodel `Div` head)) => Jit (M
 instance (TensorOp r, Tensorial t, Floating t, N head, N dmodel, Mod dmodel head ~ 0, N queries, N keys, KnownNat (dmodel `Div` head)) => 
           Model (MultiHeadAttention r t head dmodel) (r [queries, dmodel] t, r [keys, dmodel] t, r [keys, dmodel] t) (r [queries, dmodel] t) where
   feed (MultiHeadAttention m) = feed m
+
+
+-- Non determinisitic
+
+
+
+
+
+
+
+

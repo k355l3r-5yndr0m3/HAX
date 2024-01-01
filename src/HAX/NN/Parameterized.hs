@@ -98,11 +98,15 @@ instance Parameter ReLU
 type instance ReverseJit Softmax = Softmax
 instance Parameter Softmax
 type instance ReverseJit (Convolute Tensor t i s o) = Convolute Tracer t i s o
-instance (Tensorial t, KnownShape s, KnownNat i, KnownNat o, KnownShape (s :+ o), TensorOp r) => Parameter (Convolute r t i s o) where
+instance (Tensorial t, KnownShape s, KnownNat i, KnownNat o, KnownShape (s :+ o), TensorOp r) => Parameter (Convolute r t i s o)
 type instance ReverseJit (f >> g) = ReverseJit f >> ReverseJit g
 instance (Parameter f, Parameter g) => Parameter (f >> g)
 type instance ReverseJit (f !! g) = ReverseJit f !! ReverseJit g
 instance (Parameter f, Parameter g) => Parameter (f !! g)
+type instance ReverseJit (MultiHeadAttentionGeneral Tensor t head key query key' val val' out) = MultiHeadAttentionGeneral Tracer t head key query key' val val' out
+instance (Tensorial t, N head, N key, N query, N key', N val, N val', N out, TensorOp r) => Parameter (MultiHeadAttentionGeneral r t head key query key' val val' out)
+type instance ReverseJit (MultiHeadAttention Tensor t head dmodel) = MultiHeadAttention Tracer t head dmodel
+instance (Tensorial t, N head, N dmodel, TensorOp r, N (dmodel `Div` head)) => Parameter (MultiHeadAttention r t head dmodel)
 
 step :: (ReverseJit (JitF p) ~ p, JitT p ~ JitF p, Jit' p, Jit p, Parameter p) => Double -> JitT p -> JitT p -> JitF p
 step d = jitT (step' d)

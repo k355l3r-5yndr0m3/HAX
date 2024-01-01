@@ -29,3 +29,4 @@ fromDyn' d =
     Just d' -> d'
     Nothing -> error ("Not of expected type (Actual: " ++ show (dynTypeRep d) ++ ")\n\
                       \ (Expected: " ++ show (someTypeRep (Proxy :: Proxy a)) ++ ")")
+

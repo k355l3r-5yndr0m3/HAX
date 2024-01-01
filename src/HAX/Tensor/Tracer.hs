@@ -22,7 +22,12 @@ import MLIR
 
 import qualified Stablehlo.Dialect.Stablehlo as SHLO
 import Stablehlo.Dialect.Stablehlo.Attributes
+
 import GHC.IsList
+import Data.List (nub, sort, uncons, singleton)
+import Control.Monad (forM)
+import GHC.TypeLits (KnownNat)
+import Data.Maybe (fromMaybe, fromJust)
 
 
 newtype Tracer (s :: Shape) t = Tracer (VarTable Value -> BlockM (VarTable Value, Value))
@@ -65,7 +70,7 @@ sharing' tracer@(Tracer f) table = do
 sharing :: forall s t. T s t => Tracer s t -> TracerM Value 
 sharing tracer = TracerM (sharing' tracer)
 
-retval :: BlockM Value -> TracerM Value
+retval :: BlockM a -> TracerM a
 retval v = TracerM $ \ table -> 
   (table, ) <$> v
 
@@ -288,11 +293,11 @@ instance TensorOp Tracer where
           rank1 = shapeRank (Proxy :: Proxy s1)
           rank2 = shapeRank (Proxy :: Proxy s2)
 
-  unsafeIota :: forall s t. T s t => Integer -> Tracer s t
+  unsafeIota :: forall s t. T s t => Int -> Tracer s t
   unsafeIota dims = assert (dims < rank) $ mkTracer $ do 
-    retval $ SHLO._IotaOp (IntegerAttr I64 (fromInteger dims)) _type
+    retval $ SHLO._IotaOp (IntegerAttr I64 (fromIntegral dims)) _type
     where _type = tensorTypeOf (Biproxy :: Biproxy s t)
-          rank  = shapeRank (Proxy :: Proxy s)
+          rank  = fromInteger $ shapeRank (Proxy :: Proxy s)
 
 
 
@@ -460,6 +465,50 @@ instance TensorOp Tracer where
           startOp :: Tracer '[] t     = splat maxIdent
           startId :: Tracer '[] Int64 = splat (-1)
           redims = ReduceDims [fromIntegral axis]
+
+  unsafeMultiDimArgmax :: forall s s' t. (Ord t, T s t, T s' t) => [Int] -> Tracer s t -> Tracer s' Int64
+  unsafeMultiDimArgmax (nub -> reduceDims) operand = 
+    assert (maximum reduceDims < fromInteger (shapeRank' @s)) $ 
+      mkTracer $ do
+        _operand <- sharing operand
+        _iotas   <- forM iotas sharing
+        _initValue <- sharing initValue
+        _initIdx   <- sharing initIdx
+
+        let reductionShape = trimIdx reduceDims operandShape
+            typing shape = tentype' @t shape:replicate reduceDimNum (tentype' @Int64 shape)
+        
+        _argmax0 <- tail <$> retval (SHLO._ReduceOp rd (_operand:_iotas ++ _initValue:replicate reduceDimNum _initIdx) (do 
+          blk0 <- blockGet (typing [] ++ typing [])
+          blockDef blk0 $ do 
+            (fromJust . uncons -> (lhs, lhsIdx), 
+             fromJust . uncons -> (rhs, rhsIdx)) <- splitAt (reduceDimNum + 1) <$> forM [0..1 + fromIntegral reduceDimNum * 2] blockArg
+            lhsGT  <- SHLO._CompareOp ComparisonDirectionGT Nothing lhs rhs (scaltype @Bool)
+            lhsLT  <- SHLO._CompareOp ComparisonDirectionLT Nothing lhs rhs (scaltype @Bool)
+            maxIdx0 <- forM (zip lhsIdx rhsIdx) $ \(l, r) -> SHLO._SelectOp lhsGT l r (scaltype @Int64)
+            maxIdx1 <- forM (zip lhsIdx rhsIdx) $ \(l, r) -> SHLO._SelectOp lhsLT r l (scaltype @Int64)
+            maxIdx2 <- forM (zip maxIdx0 maxIdx1) $ \(l, r) -> SHLO._MaxOp l r (scaltype @Int64)
+            maxVal  <- SHLO._MaxOp lhs rhs (scaltype @t)
+            SHLO._ReturnOp (maxVal:maxIdx2)) 
+          (typing reductionShape))
+        _argmax1 <- forM _argmax0 (\am -> retval (SHLO._ReshapeOp am (tentype' @Int64 (reductionShape ++ [1]))))
+        assert (reductionShape ++ [fromIntegral reduceDimNum] == resultShape) $ 
+          retval $ SHLO._ConcatenateOp (IntegerAttr I64 $ fromIntegral (length reductionShape)) _argmax1 (tentype @s' @Int64)
+    where operandShape = fromInteger <$> shapeVal' @s
+          resultShape  = fromInteger <$> shapeVal' @s'
+          reduceDimNum = length reduceDims
+          iotas :: [Tracer s Int64]   = fmap unsafeIota reduceDims 
+          initIdx :: Tracer '[] Int64 = -1
+          initValue :: Tracer '[] t   = splat maxIdent 
+          rd = ReduceDims (fromIntegral <$> reduceDims)
+          trimIdx :: [Int] -> [a] -> [a]
+          trimIdx (sort -> idx) (zip [0..] -> list) = 
+            let trim' _      []          = []
+                trim' []     a           = snd <$> a
+                trim' (i:is) ((j, a):as) | i == j    = trim' is as
+                                         | otherwise = a:trim' (i:is) as
+            in  trim' idx list
+
 
 class JNT (r :: Z) where
   fromTracer :: Tracer s t -> r s t

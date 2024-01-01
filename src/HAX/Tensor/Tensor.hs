@@ -1,8 +1,8 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DefaultSignatures #-}
 module HAX.Tensor.Tensor where
 import Prelude hiding (lookup, pred)
@@ -195,6 +195,9 @@ instance TensorOp Tensor where
   unsafePairwiseExp = jitT unsafePairwiseExp
   unsafePairwiseLog = jitT unsafePairwiseLog
 
+  unsafeArgmax = jitT unsafeArgmax
+  unsafeMultiDimArgmax axes = jitT (unsafeMultiDimArgmax axes)
+
 -- instance EqualOp Tensor where
   isEQ = jitT isEQ
   isNE = jitT isNE
@@ -204,14 +207,11 @@ instance TensorOp Tensor where
   isLT = jitT isLT
   isLE = jitT isLE
 
-  unsafeArgmax = jitT unsafeArgmax
-
 instance FusedOp Tensor where
   mse          = jitT mse
   mha          = jitT mha
   mean'        = jitT mean'
   relu         = jitT relu
-  argmax       = jitT argmax
   sigmoid      = jitT sigmoid
   softmax      = jitT . softmax
   softmax'     = jitT softmax'
@@ -232,53 +232,53 @@ class Jit'' t where
   type JitT' t :: k -> Type
   type JitC' t b :: Type
   jitIn'    :: (Cache' t b, [Buffer]) -> JitT' t p -> (b, [Buffer])
-  jitOut'   :: (f -> (CIntPtr, [AnyType]) -> b) -> (t p -> f) -> (CIntPtr, [AnyType]) -> Cache' t b
-  jitCache' :: t p -> (VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType], [Buffer] -> (JitT' t p, [Buffer]))
+  jitCache'   :: (f -> (CIntPtr, [AnyType]) -> b) -> (t p -> f) -> (CIntPtr, [AnyType]) -> Cache' t b
+  jitOut' :: t p -> (VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType], [Buffer] -> (JitT' t p, [Buffer]))
 instance Jit'' V1 where
   type JitT' V1   = V1
   type JitC' V1 b = b
   jitIn'  (Cache' q, args) _ = (q, args)
-  jitOut' continue f = Cache' . continue (f undefined)
-  jitCache' a = (pure . (,[]), [], (a,))
+  jitCache' continue f = Cache' . continue (f undefined)
+  jitOut' a = (pure . (,[]), [], (a,))
 instance Jit'' U1 where
   type JitT' U1   = U1
   type JitC' U1 b = b
   jitIn' (Cache' q, args) _ = (q, args)
-  jitOut' continue f = Cache' . continue (f U1)
-  jitCache' a = (pure . (,[]), [], (a,))
+  jitCache' continue f = Cache' . continue (f U1)
+  jitOut' a = (pure . (,[]), [], (a,))
 instance Jit'' f => Jit'' (M1 i t f) where
   type JitT' (M1 i t f)   = M1 i t (JitT' f)
   type JitC' (M1 i t f) b = Cache' f b
   jitIn' (Cache' q, args) (M1 p) = jitIn' (q, args) p
-  jitOut' continue f = Cache' . jitOut' continue (f . M1)
-  jitCache' (M1 f) = let (i, i', i'') = jitCache' f in (i, i', first M1 . i'')
+  jitCache' continue f = Cache' . jitCache' continue (f . M1)
+  jitOut' (M1 f) = let (i, i', i'') = jitOut' f in (i, i', first M1 . i'')
 instance (Jit'' f, Jit'' g) => Jit'' (f :+: g) where
   type JitT' (f :+: g)   = JitT' f :+: JitT' g
   type JitC' (f :+: g) b = (Cache' f b, Cache' g b)
   jitIn' (Cache' (f, g), args) = \case L1 l -> jitIn' (f, args) l
                                        R1 r -> jitIn' (g, args) r
-  jitOut' continue f state = Cache' (jitOut' continue (f . L1) state, jitOut' continue (f . R1) state)
-  jitCache' = \case L1 f -> let (t, t', t'') = jitCache' f in (t, t', first L1 . t'')
-                    R1 g -> let (t, t', t'') = jitCache' g in (t, t', first R1 . t'')
+  jitCache' continue f state = Cache' (jitCache' continue (f . L1) state, jitCache' continue (f . R1) state)
+  jitOut' = \case L1 f -> let (t, t', t'') = jitOut' f in (t, t', first L1 . t'')
+                  R1 g -> let (t, t', t'') = jitOut' g in (t, t', first R1 . t'')
 instance (Jit'' f, Jit'' g) => Jit'' (f :*: g) where
   type JitT' (f :*: g)   = JitT' f :*: JitT' g
   type JitC' (f :*: g) b = Cache' f (Cache' g b)
   jitIn' (Cache' q, args) (f :*: g) = jitIn' (jitIn' (q, args) f) g
-  jitOut' continues f = let f' a b = f (a :*: b) in Cache' . jitOut' (jitOut' continues) f'
-  jitCache' (a :*: b) = (\tbl -> do 
+  jitCache' continues f = let f' a b = f (a :*: b) in Cache' . jitCache' (jitCache' continues) f'
+  jitOut' (a :*: b) = (\tbl -> do 
     (tbl' , a') <- ac tbl 
     (tbl'', b') <- bc tbl' 
     return (tbl'', a' ++ b'), 
     at ++ bt, \bs -> let (a', bs')  = ar bs
                          (b', bs'') = br bs' in  (a' :*: b', bs''))
-    where (ac, at, ar) = jitCache' a
-          (bc, bt, br) = jitCache' b
+    where (ac, at, ar) = jitOut' a
+          (bc, bt, br) = jitOut' b
 instance Jit' t => Jit'' (K1 i t) where
   type JitT' (K1 i t)   = K1 i (JitT t)
   type JitC' (K1 i t) b = Cache t b
   jitIn' (Cache' q, args) (K1 p) = jitIn (q, args) p
-  jitOut' continue f = Cache' . jitOut continue (f . K1)
-  jitCache' (K1 t) = let (i, i', i'') = jitCache t in (i, i', first K1 . i'')
+  jitCache' continue f = Cache' . jitCache continue (f . K1)
+  jitOut' (K1 t) = let (i, i', i'') = jitOut t in (i, i', first K1 . i'')
 class Jit' t where
   type JitT t
   type JitC t b 
@@ -286,20 +286,20 @@ class Jit' t where
   default jitIn :: (Generic (JitT t), Rep (JitT t) ~ JitT' (Rep t), JitC t b ~ JitC' (Rep t) b, Jit'' (Rep t)) => (Cache t b, [Buffer]) -> JitT t -> (b, [Buffer])
   jitIn (coerce -> p :: Cache' (Rep t) b, args) (from -> i) = jitIn' (p, args) i
 
-  jitOut :: (f -> (CIntPtr, [AnyType]) -> b) -> (t -> f) -> (CIntPtr, [AnyType]) -> Cache t b
-  default jitOut :: (JitC t b ~ JitC' (Rep t) b, Jit'' (Rep t), Generic t) => (f -> (CIntPtr, [AnyType]) -> b) -> (t -> f) -> (CIntPtr, [AnyType]) -> Cache t b
-  jitOut continue f = coerce . jitOut' continue (f . to)
+  jitCache :: (f -> (CIntPtr, [AnyType]) -> b) -> (t -> f) -> (CIntPtr, [AnyType]) -> Cache t b
+  default jitCache :: (JitC t b ~ JitC' (Rep t) b, Jit'' (Rep t), Generic t) => (f -> (CIntPtr, [AnyType]) -> b) -> (t -> f) -> (CIntPtr, [AnyType]) -> Cache t b
+  jitCache continue f = coerce . jitCache' continue (f . to)
 
-  jitCache :: t -> (VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
-  default jitCache :: (Generic t, Generic (JitT t), Jit'' (Rep t), Rep (JitT t) ~ JitT' (Rep t)) => t -> (VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
-  jitCache (from -> t) = let (a, b, c) = jitCache' t in (a, b, first to . c) 
+  jitOut :: t -> (VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
+  default jitOut :: (Generic t, Generic (JitT t), Jit'' (Rep t), Rep (JitT t) ~ JitT' (Rep t)) => t -> (VarTable Value -> BlockM (VarTable Value, [Value]), [AnyType], [Buffer] -> (JitT t, [Buffer]))
+  jitOut (from -> t) = let (a, b, c) = jitOut' t in (a, b, first to . c) 
 instance (JNT r, T s t) => Jit' (r s t) where
   type JitT (r s t)   = Tensor s t
   type JitC (r s t) b = b
   jitIn (Cache b, args) (Tensor arg) = (b, args++[arg])
-  jitOut c f (i, t) = Cache $ c (f $ fromTracer . Tracer $ \x -> (x, ) <$> blockArg i) (i + 1, t++[tensorTypeOf (Biproxy :: Biproxy s t)])
-  jitCache (toTracer -> Tracer f) = (fmap (fmap (: [])) . f, [tensorTypeOf (Biproxy :: Biproxy s t)], \case []   -> error "Not enough output"
-                                                                                                            a:as -> (Tensor a, as))
+  jitCache c f (i, t) = Cache $ c (f $ fromTracer . Tracer $ \x -> (x, ) <$> blockArg i) (i + 1, t++[tensorTypeOf (Biproxy :: Biproxy s t)])
+  jitOut (toTracer -> Tracer f) = (fmap (fmap (: [])) . f, [tensorTypeOf (Biproxy :: Biproxy s t)], \case []   -> error "Not enough output"
+                                                                                                          a:as -> (Tensor a, as))
 instance (Jit' a, Jit' b) => Jit' (a, b) where
   type JitT (a, b)   = (JitT a, JitT b)
   type JitC (a, b) c = JitC' (Rep (a, b)) c
@@ -321,14 +321,14 @@ instance Jit' Int  where
   jitIn  (Cache (lt0, ge0), ins) idx 
     | idx >= 0  = (ge0 !! idx, ins)
     | otherwise = (lt0 !! (-idx - 1), ins)
-  jitOut continue f state = Cache ([continue (f i) state | i <- [-1, -2]], [continue (f i) state | i <- [0..maxBound]])
-  jitCache idx = (pure . (, []), [], (idx, ))
+  jitCache continue f state = Cache ([continue (f i) state | i <- [-1, -2]], [continue (f i) state | i <- [0..maxBound]])
+  jitOut idx = (pure . (, []), [], (idx, ))
 instance TypeError (Text "Jit can only be applied to first order function.") => Jit' (a -> b) where
   type JitT _   = TypeError (Text "Jit can only be applied to first order function.")
   type JitC _ _ = TypeError (Text "Jit can only be applied to first order function.")
   jitIn    = undefined
-  jitOut   = undefined
-  jitCache = undefined
+  jitCache   = undefined
+  jitOut = undefined
 type family JitE f = r | r -> f where
   JitE (a -> b) = Cache a (JitE b)
   JitE a        = CacheHit a
@@ -346,11 +346,11 @@ class Jit f where
   jit''   :: f -> (CIntPtr, [AnyType]) -> JitE f
   default jit'' :: (Jit' f, JitE f ~ CacheHit f, JitF f ~ JitT f) => f -> (CIntPtr, [AnyType]) -> JitE f
   jit'' f (_, inputs) = CacheHit executable (length outputs) (\a -> let (g, b) = reifier a in assert (null b) g)
-    where (main, outputs, reifier) = jitCache f
+    where (main, outputs, reifier) = jitOut f
           executable = compile (inputs, main, outputs)
 instance (Jit' a, Jit b) => Jit (a -> b) where
   jit' cache = jit' . jitIn cache
-  jit'' = jitOut jit''
+  jit'' = jitCache jit''
 instance (JNT r, T s t) => Jit (r s t) where
 instance Jit' a => Jit [a] where
 instance (Jit' a, Jit' b) => Jit (a, b) where
@@ -371,3 +371,4 @@ jit = jit' . (, []) . (`jit''` (0, []))
 
 jitT :: (Jit f, f ~ ReverseJit (JitF f)) => f -> JitF f
 jitT = jit
+

@@ -16,7 +16,6 @@ import HAX.Utils
 import Data.Int
 import Data.Word
 import Data.Bifunctor
-import Data.Proxy 
 
 import System.Random (mkStdGen)
 import System.IO (hFlush, stdout)
@@ -68,4 +67,6 @@ main = do
   forM_ logging (\a -> print a >> hFlush stdout)
   
   echoNumCompilations
+
   return ()
+

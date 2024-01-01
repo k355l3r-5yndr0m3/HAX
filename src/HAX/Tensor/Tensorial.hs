@@ -9,6 +9,7 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 module HAX.Tensor.Tensorial where
 import Prelude hiding (pred)
 import HAX.PjRt.BufferType
@@ -59,6 +60,11 @@ instance (KnownNat a, KnownShape as) => KnownShape (a ': as) where
   shapeRank _ = 1 + shapeRank (Proxy :: Proxy as)
   shapeValHead _ = natVal (Proxy :: Proxy a)
 
+shapeVal' :: forall s. KnownShape s => [Integer]
+shapeVal' = shapeVal (Proxy :: Proxy s)
+
+shapeRank' :: forall s. KnownShape s => Integer
+shapeRank' = shapeRank (Proxy :: Proxy s)
 reifyShape :: forall r. [Integer] -> (forall (s :: Shape). KnownShape s => Proxy s -> r) -> r
 reifyShape []     f = f (Proxy :: Proxy '[])
 reifyShape (a:as) f = reifyNat a (\ p -> reifyShape as (f . k p))
@@ -182,9 +188,18 @@ data Biproxy a b = Biproxy
 
 -- Tensorial
 type Z = Shape -> Type -> Type
--- TODO: Remove Gradient
 tensorTypeOf :: forall r s t. T s t => r s t -> AnyType
 tensorTypeOf _ = tensorTypeOf' (fromIntegral <$> shapeVal (Proxy :: Proxy s)) (Proxy :: Proxy t)
+
+tentype  :: forall s t. T s t => AnyType
+tentype = tensorTypeOf' (fromIntegral <$> shapeVal' @s) (Proxy :: Proxy t)
+
+tentype' :: forall t. Tensorial t => [Int64] -> AnyType
+tentype' = (`tensorTypeOf'` (Proxy :: Proxy t))
+
+scaltype :: forall t. Tensorial t => AnyType 
+scaltype = tensorTypeOf' [] (Proxy :: Proxy t)
+
 class (Prim (StorageType t), Storable (StorageType t), Typeable t) => Tensorial t where
   type StorageType t = r | r -> t
 
@@ -553,17 +568,14 @@ type family ListItem a where
 
 class KnownShape s => TensorLiteral (s :: Shape) where
   type Literal s t
-
   fromTensorLiteral :: Proxy s -> q -> (t -> q) -> Literal s t -> [q]
 
 instance TensorLiteral '[] where
   type Literal '[] t = t
-
   fromTensorLiteral _ _ c a = [c a]
 
 instance (KnownNat i, TensorLiteral is) => TensorLiteral (i ': is) where
   type Literal (i ': is) t = [Literal is t]
-  
   fromTensorLiteral (fromInteger . product . shapeVal -> nelem) p c l = take nelem (concatMap f l ++ repeat p)
     where f = fromTensorLiteral (Proxy :: Proxy is) p c
 
@@ -610,7 +622,7 @@ class (Transformable r, Typeable r) => TensorOp (r :: Shape -> Type -> Type) whe
   unsafeReduceAdd      :: (T s0 t, T s1 t, Num t) => r s0 t -> [Integer] -> r s1 t
   unsafeReduceMul      :: (T s0 t, T s1 t, Num t) => r s0 t -> [Integer] -> r s1 t
   unsafeConvolution    :: (T s0 t, T s1 t, T s2 t, Num t) => r s0 t -> r s1 t -> r s2 t
-  unsafeIota           :: (T s t, Enum t) => Integer -> r s t
+  unsafeIota           :: (T s t, Enum t) => Int -> r s t
                        
   unsafePairwiseAdd    :: (T s t, Num t) => r s t -> r s t -> r s t
   unsafePairwiseSub    :: (T s t, Num t) => r s t -> r s t -> r s t
@@ -642,18 +654,20 @@ class (Transformable r, Typeable r) => TensorOp (r :: Shape -> Type -> Type) whe
   splat                :: (T s t) => t -> r s t
 
   -- TODO: Return both the argmax and max values
+  --       Implement argmin
   unsafeArgmax         :: (Ord t, T s t, T s' t) => Int -> r s t -> r s' Int64
+  unsafeMultiDimArgmax :: (Ord t, T s t, T s' t) => [Int] -> r s t -> r s' Int64
 
   -- TODO: Move these to a different class
   unsafeLinspace       :: forall s t. (T s t, Fractional t, Enum t) => Integer -> (t, t) -> r s t
-  unsafeLinspace axis (low, high) = unsafeIota axis `unsafePairwiseMul` splat delta
+  unsafeLinspace (fromInteger -> axis) (low, high) = unsafeIota axis `unsafePairwiseMul` splat delta
     where delta = (high - low) / (nstep - 1)
-          nstep = fromInteger $ shapeVal (Proxy :: Proxy s) !! fromInteger axis
+          nstep = fromInteger $ shapeVal (Proxy :: Proxy s) !! axis
 
   unsafeMultiIota      :: forall s t. (T s t, Enum t) => [Integer] -> Integer -> r s t
   unsafeMultiIota []     _ = error "idim needs to be given"
-  unsafeMultiIota [a]    d = assert (shapeVal (Proxy :: Proxy s) !! fromInteger d == 1) unsafeIota a
-  unsafeMultiIota (a:as) d = forceShape highShape (unsafeMultiIota as d) (forceShape lowShape (unsafeIota a) (unsafeConcat d))
+  unsafeMultiIota [fromInteger -> a]    d = assert (shapeVal (Proxy :: Proxy s) !! fromInteger d == 1) unsafeIota a
+  unsafeMultiIota ((fromInteger -> a):as) d = forceShape highShape (unsafeMultiIota as d) (forceShape lowShape (unsafeIota a) (unsafeConcat d))
     where changeAt i f ls = let (begin, end) = splitAt i ls in  begin ++ f (head end) : tail end
           shape = shapeVal (Proxy :: Proxy s)
           d' = fromInteger d
@@ -701,8 +715,6 @@ class TensorOp r => FusedOp r where
   countTrue :: KnownShape s => r s Bool -> r '[] Int64
   countTrue = reduceAdd' . select 0 1
   
-  argmax :: (T s t, Ord t, KnownNat axis, s' ~ Argmax s axis, T s' Int64) => Proxy axis -> r s t -> r s' Int64
-  argmax = unsafeArgmax . fromIntegral . natVal
 
   mean'  :: forall s t. (T s t, Fractional t) => r s t -> r '[] t
   mean' = (/n) . reduceAdd' 
@@ -777,7 +789,7 @@ reduceMul' :: forall r s t. (TensorOp r, T s t, Num t) => r s t -> r '[] t
 reduceMul' = (`unsafeReduceMul` [0..shapeRank (Proxy :: Proxy s) - 1])
 
 type family Split (lhs :: [a]) (rhs :: [a]) :: Constraint where
-  Split (a ': ls) (a ': rs) = (a ~ a, Split ls rs)
+  Split (a ': ls) (a ': rs) = Split ls rs
   Split (a ': ls) (b ': rs) = (ls ~ rs)
   Split '[] '[] = ()
   Split _ _ = TypeError (Text "lhs and rhs can only differ by at most one elem")
@@ -795,10 +807,10 @@ linspace = unsafeLinspace . natVal
 onehot :: forall r s c k. (TensorOp r, KnownShape s, KnownNat c, k ~ (s ++ '[c]), c ~ Last k, KnownShape k, s ~ Init k) => r s Int64 -> r k Bool
 onehot indices = isEQ c i
   where c :: r k Int64 = unsafeBroadcast indices [0..r - 1] 
-        i :: r k Int64 = unsafeIota r
+        i :: r k Int64 = unsafeIota (fromInteger r)
         r = shapeRank (Proxy :: Proxy s)
 
-(@%) :: forall r t n ns. (KnownNat n, KnownShape ns, Num (r '[] Int64), Tensorial t, TensorOp r) => r (n ': ns) t -> Integer -> r ns t
+(@%) :: forall r t n ns. (KnownNat n, KnownShape ns, Tensorial t, TensorOp r) => r (n ': ns) t -> Integer -> r ns t
 operand @% (fromInteger -> index :: r '[] Int64) = unsafeGather operand index [0..resultRank - 1] [0] [0] 0 (1:resultShape)
   where resultRank  = shapeRank (Proxy :: Proxy ns)
         resultShape = shapeVal  (Proxy :: Proxy ns)
@@ -838,7 +850,7 @@ reshape :: (Tensorial t, KnownShape s0, KnownShape s1, Reshapable s0 s1, TensorO
 reshape = unsafeReshape
 
 iota :: (Iota d s, KnownShape s, KnownNat d, Tensorial t, Enum t, TensorOp r) => Proxy d -> r s t
-iota = unsafeIota . natVal
+iota = unsafeIota . fromInteger . natVal
 
 linearMap :: (KnownNat i, KnownNat o, Tensorial t, Num t, TensorOp r) => r '[i, o] t -> r '[i] t -> r '[o] t 
 linearMap mat vec = unsafeDotGeneral mat vec dotAttr 
@@ -860,6 +872,11 @@ convolution' :: forall input kernel output r t. (Tensorial t, Num t, TensorOp r,
 convolution' input kernel = unsafeReshape (unsafeConvolution input' kernel :: r (1 ': output) t)
   where input' = unsafeReshape input :: r (1 ': input) t
 
+argmax :: forall axis r s t s'. (TensorOp r, T s t, Ord t, KnownNat axis, s' ~ Argmax s axis, T s' Int64) => r s t -> r s' Int64
+argmax = unsafeArgmax $ fromIntegral $ natVal (Proxy :: Proxy axis)
+
+mdargmax :: forall axes r s s' t. (TensorOp r, KnownShape axes, T s t, T s' Int64, Ord t, s' ~ MultiDimArgmax s axes) => r s t -> r s' Int64
+mdargmax = unsafeMultiDimArgmax (fromInteger <$> shapeVal' @axes)
 
 (|#|) :: (Tensorial t, TensorProductConstraint l r p, Num t, TensorOp a) => a l t -> a r t -> a p t
 (|#|) = prod
@@ -868,13 +885,21 @@ infixl 9 |#|
 (|@|) :: (Tensorial t, KnownNat n, KnownNat m, KnownNat q, Num t, TensorOp r) => r '[n, m] t -> r '[m, q] t -> r '[n, q] t
 (|@|) = matmul
 infixl 8 |@|
--- TODO: Add conditional
+
+type family Append (x :: [a]) (y :: a) :: [a] where 
+  Append '[]       y = '[y]
+  Append (a ': as) y = a ': Append as y
 
 type family Argmax (a :: Shape) (d :: Nat) :: Shape where
   Argmax (a ': as) 0 = as
   Argmax (a ': as) i = a ': Argmax as (i - 1)
   Argmax '[]       _ = TypeError (Text "Reduction axis invalid")
 
+type family Length (l :: [a]) :: Nat where
+  Length '[] = 0
+  Length (_ ': l) = 1 + Length l
+
+type MultiDimArgmax s r = Append (Reduce s r) (Length r) 
 
 -- Foldind over tensors 
 -- Use these functions if memory is limited 
@@ -954,7 +979,6 @@ foldlSplit3 func inital lhs rhs thd =
         lhs' = determindSpliting lhsShape lhsShape'
         rhs' = determindSpliting rhsShape rhsShape'
         thd' = determindSpliting thdShape thdShape'
-
 
 -- Orphans
 instance (TensorOp r, T s t, Num t) => Num (r s t) where

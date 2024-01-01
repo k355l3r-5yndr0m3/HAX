@@ -146,6 +146,14 @@ executable HAX
     hs-source-dirs:   example
     default-language: GHC2021
 
+executable Benchmark 
+    import:           warnings 
+    main-is:          Main.hs
+    build-depends: 
+        base, HAX, random, criterion
+    hs-source-dirs:   benchmark
+    default-language: GHC2021
+
 
 test-suite HAX-test
     import:           warnings
